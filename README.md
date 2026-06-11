@@ -48,6 +48,4 @@ cargo test --workspace
 - [fountain_transfer_core/README.md](fountain_transfer_core/README.md) — library API
 - [fountain_transfer/README.md](fountain_transfer/README.md) — CLI flags and wire format
 
-## Maintainers
 
-To refresh this tree from the monorepo, see [PUBLISH.md](PUBLISH.md) in this directory (monorepo path: `standalone/PUBLISH.md`).
