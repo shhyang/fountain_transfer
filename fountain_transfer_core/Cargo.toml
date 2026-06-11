@@ -1,0 +1,27 @@
+# Standalone crate manifest (single-repo publish). Installed by standalone/sync-from-monorepo.sh.
+# Monorepo dev uses Cargo.toml with path deps to the full workspace instead.
+
+[package]
+name = "fountain_transfer_core"
+version = "1.0.0"
+edition = "2024"
+authors = ["Shenghao Yang"]
+license = "MIT"
+description = "Library-first transfer facade over RaptorQ and Raptor10 codecs"
+readme = "README.md"
+repository = "https://github.com/shhyang/fountain_transfer"
+documentation = "https://github.com/shhyang/fountain_transfer/tree/main/fountain_transfer_core"
+keywords = ["fountain-code", "erasure-coding", "file-transfer", "raptor-code", "fec"]
+categories = ["algorithms", "encoding", "network-programming"]
+
+[features]
+default = ["raptor-q", "raptor-10"]
+raptor-q = ["dep:raptor_q"]
+raptor-10 = ["dep:raptor_10"]
+
+[dependencies]
+fountain_engine = "1.3"
+fountain_utility = "1.3"
+fountain_operators = { git = "https://github.com/shhyang/fountain_operators", features = ["simd"] }
+raptor_q = { package = "fountain_raptor_q", version = "1.2", optional = true }
+raptor_10 = { package = "fountain_raptor_10", version = "1.2", optional = true }

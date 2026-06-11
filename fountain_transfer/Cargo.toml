@@ -1,0 +1,39 @@
+# Standalone crate manifest (single-repo publish). Installed by standalone/sync-from-monorepo.sh.
+
+[package]
+name = "fountain_transfer"
+version = "1.0.0"
+edition = "2024"
+authors = ["Shenghao Yang"]
+license = "MIT"
+description = "Rateless UDP file transfer CLI built on fountain_transfer_core"
+readme = "README.md"
+repository = "https://github.com/shhyang/fountain_transfer"
+documentation = "https://github.com/shhyang/fountain_transfer/tree/main/fountain_transfer"
+keywords = ["fountain-code", "file-transfer", "udp", "erasure-coding", "fec"]
+categories = ["command-line-utilities", "network-programming", "encoding"]
+
+[features]
+default = ["raptor-q", "raptor-10"]
+raptor-q = ["fountain_transfer_core/raptor-q"]
+raptor-10 = ["fountain_transfer_core/raptor-10"]
+
+[lib]
+name = "fountain_transfer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fountain"
+path = "src/main.rs"
+
+[dependencies]
+fountain_transfer_core = { path = "../fountain_transfer_core", version = "1.0", default-features = false }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
+sha2 = "0.10"

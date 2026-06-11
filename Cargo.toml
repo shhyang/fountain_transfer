@@ -1,0 +1,12 @@
+# Workspace root for the standalone GitHub repo (https://github.com/shhyang/fountain_transfer).
+# Copy this file to the publish clone root; see standalone/PUBLISH.md.
+
+[workspace]
+members = ["fountain_transfer_core", "fountain_transfer"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+authors = ["Shenghao Yang"]
+license = "MIT"
