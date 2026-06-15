@@ -30,6 +30,7 @@ pub struct RecvOutcome {
     pub object: Vec<u8>,
     pub packets_received: usize,
     pub peer: SocketAddr,
+    pub listen_addr: SocketAddr,
 }
 
 pub async fn receive_to_file(
@@ -51,6 +52,7 @@ pub async fn receive_object_with_socket(
     socket: &UdpSocket,
     config: &RecvConfig,
 ) -> Result<RecvOutcome, NetError> {
+    let listen_addr = socket.local_addr().map_err(NetError::Io)?;
     let mut session: Option<SessionParams> = None;
     let mut decoder: Option<TransferDecoderImpl> = None;
     let mut packets_received = 0usize;
@@ -109,6 +111,7 @@ pub async fn receive_object_with_socket(
                         object,
                         packets_received,
                         peer,
+                        listen_addr,
                     });
                 }
             }

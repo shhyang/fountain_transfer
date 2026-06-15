@@ -22,6 +22,6 @@ raptor-10 = ["dep:raptor_10"]
 [dependencies]
 fountain_engine = "1.3"
 fountain_utility = "1.3"
-fountain_operators = { git = "https://github.com/shhyang/fountain_operators", features = ["simd"] }
+fountain_operators = { git = "https://github.com/shhyang/fountain_operators", default-features = false }
 raptor_q = { package = "fountain_raptor_q", version = "1.2", optional = true }
 raptor_10 = { package = "fountain_raptor_10", version = "1.2", optional = true }

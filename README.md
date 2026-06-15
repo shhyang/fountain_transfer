@@ -21,10 +21,10 @@ Two terminals (loopback):
 
 ```bash
 # Terminal 1
-cargo run -p fountain_transfer -- recv --listen 127.0.0.1:7878 -o received.bin
+cargo run -p fountain_transfer -- recv received.bin
 
 # Terminal 2
-cargo run -p fountain_transfer -- send ./myfile.bin --addr 127.0.0.1:7878 --codec raptorq
+cargo run -p fountain_transfer -- send ./myfile.bin 127.0.0.1:7878
 ```
 
 ## Dependencies (published fountain crates)
@@ -33,7 +33,7 @@ This repo depends on crates.io / GitHub packages, not the full monorepo:
 
 - `fountain_engine`, `fountain_utility` (crates.io)
 - `fountain_raptor_q`, `fountain_raptor_10` (crates.io)
-- `fountain_operators` ([GitHub](https://github.com/shhyang/fountain_operators))
+- `fountain_operators` ([GitHub](https://github.com/shhyang/fountain_operators)) — portable `SlabDataOperator` only (`default-features = false`; no `simd` feature)
 
 RFC object layout and packet codecs live in **`fountain_transfer_core`**; the Raptor scheme crates are unchanged.
 

@@ -55,7 +55,7 @@ pub(crate) fn default_raptor_q_ldpc_type() -> LDPCType {
 }
 
 use fountain_engine::traits::DataOperator;
-use fountain_operators::{selected_kernel_kind, SimdDataOperator, SlabDataOperator};
+use fountain_operators::SlabDataOperator;
 #[cfg(feature = "raptor-10")]
 use rfc5053_codec::EncodingPacket as Rfc5053Packet;
 #[cfg(feature = "raptor-q")]
@@ -183,7 +183,6 @@ pub trait StorageManager {
 
 pub struct SlabStorageManager {
     symbol_size_t: usize,
-    prefer_simd: bool,
     packets: Vec<TransferPacket>,
 }
 
@@ -192,16 +191,6 @@ impl SlabStorageManager {
     pub fn new(symbol_size_t: usize) -> Self {
         Self {
             symbol_size_t,
-            prefer_simd: true,
-            packets: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_kernel_preference(symbol_size_t: usize, prefer_simd: bool) -> Self {
-        Self {
-            symbol_size_t,
-            prefer_simd,
             packets: Vec::new(),
         }
     }
@@ -213,11 +202,7 @@ impl StorageManager for SlabStorageManager {
     }
 
     fn new_operator(&self) -> Box<dyn DataOperator> {
-        if self.prefer_simd && selected_kernel_kind().is_simd() {
-            Box::new(SimdDataOperator::new(self.symbol_size_t))
-        } else {
-            Box::new(SlabDataOperator::new(self.symbol_size_t))
-        }
+        Box::new(SlabDataOperator::new(self.symbol_size_t))
     }
 
     fn store_packet(&mut self, packet: TransferPacket) -> usize {

@@ -98,9 +98,11 @@ Constructors:
 | Type | Role |
 |------|------|
 | [`StorageManager`](src/lib.rs) | Trait: `symbol_size()`, `new_operator()`, optional packet store |
-| [`SlabStorageManager`](src/lib.rs) | Default adapter — `SlabDataOperator` or `SimdDataOperator` via `fountain_operators` |
+| [`SlabStorageManager`](src/lib.rs) | Optional adapter — portable [`SlabDataOperator`](https://github.com/shhyang/fountain_operators) via `fountain_operators` (no SIMD unless you enable `simd` on that crate yourself) |
 
-Pass a shared `SlabStorageManager` to both encoder and decoder constructors to use the same operator backend and optionally retain packets by handle.
+Pass a shared `SlabStorageManager` to both encoder and decoder constructors to use the same slab backend and optionally retain packets by handle.
+
+Default encode/decode (`TransferEncoderImpl::new` / `TransferDecoderImpl::new`) uses [`VecDataOperater`](https://docs.rs/fountain_utility) from `fountain_utility`, not slab operators.
 
 ### Errors
 
