@@ -13,6 +13,10 @@ commit brings the local `main` branch to 8 commits ahead of `origin/main`.
 
 ## Changed in this pass
 
+- Optional **`bhp`** feature (not default): `CodecKind::Bhp`, wire id `CODEC_BHP=2`,
+  CLI `--codec bhp`, and `bhp_codec` mirroring the R10 transfer path over
+  `fountain_scheme::BinaryHdpcPi` (path sibling scheme 2.2). RQ remains CLI default.
+
 - Added public `ProgressEvent` and `ProgressCallback` APIs. Sender events cover
   session start, every source/repair packet with cumulative and planned bytes,
   and send completion. Receiver events cover session establishment, accepted

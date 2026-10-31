@@ -18,7 +18,7 @@ use fountain_transfer_core::TransferError;
 #[command(
     name = "fountain",
     about = "Rateless UDP file transfer",
-    long_about = "Send a file as RaptorQ or Raptor10 fountain-coded UDP packets.\n\
+    long_about = "Send a file as RaptorQ, Raptor10, or BHP fountain-coded UDP packets.\n\
                   Start the receiver first, then run the sender.",
     version,
     arg_required_else_help = true,
@@ -45,7 +45,7 @@ enum Commands {
         #[arg(value_name = "HOST:PORT")]
         addr: String,
 
-        /// Codec to use: raptorq (RFC 6330) or raptor10 (RFC 5053).
+        /// Codec to use: raptorq (RFC 6330), raptor10 (RFC 5053), or bhp (requires `--features bhp`).
         #[arg(long, default_value = "raptorq", value_name = "CODEC")]
         codec: String,
 

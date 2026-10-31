@@ -47,7 +47,7 @@ fn top_level_help_names_commands_and_workflow() {
     let output = run(&["--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Send a file as RaptorQ or Raptor10 fountain-coded UDP packets"));
+    assert!(stdout.contains("Send a file as RaptorQ, Raptor10, or BHP fountain-coded UDP packets"));
     assert!(stdout.contains("send"));
     assert!(stdout.contains("recv"));
     assert!(stdout.contains("Start the receiver first"));
@@ -118,7 +118,7 @@ fn unknown_codec_is_an_invalid_input_error() {
     assert_eq!(output.status.code(), Some(1));
     let message = stderr(&output);
     assert!(message.contains("invalid --codec value"));
-    assert!(message.contains("use raptorq or raptor10"));
+    assert!(message.contains("use raptorq, raptor10, or bhp"));
 }
 
 #[test]

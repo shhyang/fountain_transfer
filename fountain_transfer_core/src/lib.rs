@@ -1,4 +1,4 @@
-//! Dual-codec transfer facade over RaptorQ and Raptor10.
+//! Transfer facade over RaptorQ, Raptor10, and optional BHP.
 //!
 //! See the [crate README](../README.md) for usage, API tables, and v1 limitations.
 //!
@@ -6,10 +6,12 @@
 //!
 //! - **`raptor-q`** (default) — RFC 6330 via `fountain_scheme::rfc::rq`; enables [`CodecConfig::RaptorQ`].
 //! - **`raptor-10`** (default) — RFC 5053 via `fountain_scheme::rfc::r10`; enables [`CodecConfig::Raptor10`].
+//! - **`bhp`** (optional) — BinaryHdpcPi via `fountain_scheme::BinaryHdpcPi`; enables [`CodecConfig::Bhp`].
 //!
 //! Build with only one codec, e.g. `cargo build -p fountain_transfer_core --no-default-features --features raptor-q`.
-//! With neither codec feature enabled, the crate still builds for API/documentation tooling,
-//! but all codec constructors return [`TransferError::CodecNotEnabled`].
+//! Enable BHP with `--features bhp` (not in the default feature set). With no codec
+//! features enabled, the crate still builds for API/documentation tooling, but all
+//! codec constructors return [`TransferError::CodecNotEnabled`].
 //!
 //! # Main types
 //!
@@ -24,7 +26,7 @@
 //! Re-exported for integrators: [`DecodeStatus`].
 
 #![cfg_attr(
-    not(any(feature = "raptor-q", feature = "raptor-10")),
+    not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")),
     allow(unreachable_code, unused_variables, unused_mut)
 )]
 
@@ -32,8 +34,10 @@ pub use fountain_engine::types::DecodeStatus;
 
 #[cfg(feature = "raptor-10")]
 mod rfc5053_codec;
-#[cfg(feature = "raptor-10")]
+#[cfg(any(feature = "raptor-10", feature = "bhp"))]
 mod rfc5053_layout;
+#[cfg(feature = "bhp")]
+mod bhp_codec;
 #[cfg(feature = "raptor-q")]
 mod rfc6330_codec;
 #[cfg(feature = "raptor-q")]
@@ -45,6 +49,11 @@ mod rfc6330_mapping;
 pub use rfc5053_codec::{
     EncodingPacket as Rfc5053EncodingPacket, PayloadId as Rfc5053PayloadId, Rfc5053Decoder,
     Rfc5053Encoder, Rfc5053EncoderBuilder, Rfc5053TransmissionParams,
+};
+#[cfg(feature = "bhp")]
+pub use bhp_codec::{
+    EncodingPacket as BhpEncodingPacket, PayloadId as BhpPayloadId, BhpDecoder, BhpEncoder,
+    BhpEncoderBuilder, BhpTransmissionParams,
 };
 #[cfg(feature = "raptor-q")]
 pub use rfc6330_codec::{
@@ -59,6 +68,8 @@ use fountain_engine::traits::DataOperator;
 use fountain_operators::SlabDataOperator;
 #[cfg(feature = "raptor-10")]
 use rfc5053_codec::EncodingPacket as Rfc5053Packet;
+#[cfg(feature = "bhp")]
+use bhp_codec::EncodingPacket as BhpPacket;
 #[cfg(feature = "raptor-q")]
 use rfc6330_codec::EncodingPacket as Rfc6330Packet;
 use std::error::Error;
@@ -74,6 +85,8 @@ pub enum CodecKind {
     RaptorQ,
     /// Raptor10, as specified by RFC 5053.
     Raptor10,
+    /// BHP (BinaryHdpcPi) — binary RQ-triangle HDPC + message PI.
+    Bhp,
 }
 
 impl Display for CodecKind {
@@ -81,6 +94,7 @@ impl Display for CodecKind {
         f.write_str(match self {
             Self::RaptorQ => "RaptorQ",
             Self::Raptor10 => "Raptor10",
+            Self::Bhp => "BHP",
         })
     }
 }
@@ -115,10 +129,13 @@ pub enum CodecConfig {
         /// Maximum degree used by the scheme configuration.
         dmax: usize,
     },
+    /// BHP (BinaryHdpcPi) configuration.
+    #[cfg(feature = "bhp")]
+    Bhp,
     /// Placeholder used when no codec feature is enabled.
     ///
     /// `Infallible` makes this variant impossible to construct.
-    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
     #[doc(hidden)]
     NoCodec(std::convert::Infallible),
 }
@@ -184,7 +201,9 @@ impl TransferSpec {
             CodecConfig::RaptorQ { .. } => CodecKind::RaptorQ,
             #[cfg(feature = "raptor-10")]
             CodecConfig::Raptor10 { .. } => CodecKind::Raptor10,
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            CodecConfig::Bhp => CodecKind::Bhp,
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             CodecConfig::NoCodec(never) => match *never {},
         }
     }
@@ -257,6 +276,7 @@ fn codec_feature_name(kind: CodecKind) -> &'static str {
     match kind {
         CodecKind::RaptorQ => "raptor-q",
         CodecKind::Raptor10 => "raptor-10",
+        CodecKind::Bhp => "bhp",
     }
 }
 
@@ -332,7 +352,9 @@ pub enum TransferEncoderImpl {
     RaptorQ(Rfc6330Encoder, TransferSpec),
     #[cfg(feature = "raptor-10")]
     Raptor10(Rfc5053Encoder, TransferSpec),
-    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[cfg(feature = "bhp")]
+    Bhp(BhpEncoder, TransferSpec),
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
     #[doc(hidden)]
     NoCodec(std::convert::Infallible),
 }
@@ -376,7 +398,18 @@ impl TransferEncoderImpl {
                     spec.clone(),
                 )
             }
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            CodecConfig::Bhp => {
+                let params = BhpTransmissionParams::for_object(
+                    spec.transfer_length_f,
+                    spec.symbol_size_t,
+                );
+                Self::Bhp(
+                    BhpEncoder::new_with_default_operator(params, object),
+                    spec.clone(),
+                )
+            }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(encoder)
@@ -429,7 +462,18 @@ impl TransferEncoderImpl {
                     spec.clone(),
                 )
             }
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            CodecConfig::Bhp => {
+                let params = BhpTransmissionParams::for_object(
+                    spec.transfer_length_f,
+                    spec.symbol_size_t,
+                );
+                Self::Bhp(
+                    BhpEncoder::new_with_operator(params, object, manager.new_operator()),
+                    spec.clone(),
+                )
+            }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(encoder)
@@ -459,7 +503,17 @@ impl TransferEncoder for TransferEncoderImpl {
                     symbol: pkt.symbol,
                 })
                 .collect(),
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(enc, _) => enc
+                .source_packets()
+                .into_iter()
+                .map(|pkt| TransferPacket {
+                    sbn: pkt.payload_id.sbn,
+                    esi: pkt.payload_id.esi,
+                    symbol: pkt.symbol,
+                })
+                .collect(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         }
     }
@@ -486,7 +540,17 @@ impl TransferEncoder for TransferEncoderImpl {
                     symbol: pkt.symbol,
                 })
                 .collect(),
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(enc, _) => enc
+                .repair_packets(start_repair_index, count)
+                .into_iter()
+                .map(|pkt| TransferPacket {
+                    sbn: pkt.payload_id.sbn,
+                    esi: pkt.payload_id.esi,
+                    symbol: pkt.symbol,
+                })
+                .collect(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         }
     }
@@ -498,7 +562,9 @@ pub enum TransferDecoderImpl {
     RaptorQ(Rfc6330Decoder, TransferSpec),
     #[cfg(feature = "raptor-10")]
     Raptor10(Rfc5053Decoder, TransferSpec),
-    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[cfg(feature = "bhp")]
+    Bhp(BhpDecoder, TransferSpec),
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
     #[doc(hidden)]
     NoCodec(std::convert::Infallible),
 }
@@ -527,7 +593,15 @@ impl TransferDecoderImpl {
                 );
                 Self::Raptor10(Rfc5053Decoder::new_with_default_operator(params), spec)
             }
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            CodecConfig::Bhp => {
+                let params = BhpTransmissionParams::for_object(
+                    spec.transfer_length_f,
+                    spec.symbol_size_t,
+                );
+                Self::Bhp(BhpDecoder::new_with_default_operator(params), spec)
+            }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(decoder)
@@ -573,7 +647,18 @@ impl TransferDecoderImpl {
                     spec,
                 )
             }
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            CodecConfig::Bhp => {
+                let params = BhpTransmissionParams::for_object(
+                    spec.transfer_length_f,
+                    spec.symbol_size_t,
+                );
+                Self::Bhp(
+                    BhpDecoder::new_with_operator(params, manager.new_operator()),
+                    spec,
+                )
+            }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(decoder)
@@ -590,7 +675,9 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(_, spec) => spec.symbol_size_t,
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(_, spec) => spec.symbol_size_t,
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(_, spec) => spec.symbol_size_t,
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         };
         if packet.symbol.len() != symbol_size {
@@ -616,7 +703,15 @@ impl TransferDecoder for TransferDecoderImpl {
                 },
                 symbol: packet.symbol.clone(),
             }),
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(dec, _) => dec.add_packet(&BhpPacket {
+                payload_id: BhpPayloadId {
+                    sbn: packet.sbn,
+                    esi: packet.esi,
+                },
+                symbol: packet.symbol.clone(),
+            }),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         };
         Ok(status)
@@ -628,7 +723,9 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(dec, _) => dec.decode_status(),
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(dec, _) => dec.decode_status(),
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(dec, _) => dec.decode_status(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         }
     }
@@ -642,7 +739,9 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(dec, _) => dec.recover_object(),
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(dec, _) => dec.recover_object(),
-            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            #[cfg(feature = "bhp")]
+            Self::Bhp(dec, _) => dec.recover_object(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         };
         Ok(object)
@@ -700,6 +799,17 @@ fn build_codec_config(kind: CodecKind, dmax: usize) -> Result<CodecConfig, Trans
                 Err(TransferError::CodecNotEnabled(kind))
             }
         }
+        CodecKind::Bhp => {
+            #[cfg(feature = "bhp")]
+            {
+                let _ = dmax;
+                Ok(CodecConfig::Bhp)
+            }
+            #[cfg(not(feature = "bhp"))]
+            {
+                Err(TransferError::CodecNotEnabled(kind))
+            }
+        }
     }
 }
 
@@ -722,6 +832,12 @@ fn ensure_codec_enabled(kind: CodecKind) -> Result<(), TransferError> {
             #[cfg(feature = "raptor-10")]
             Ok(())
         }
+        CodecKind::Bhp => {
+            #[cfg(not(feature = "bhp"))]
+            return Err(TransferError::CodecNotEnabled(kind));
+            #[cfg(feature = "bhp")]
+            Ok(())
+        }
     }
 }
 
@@ -729,7 +845,7 @@ fn ensure_codec_enabled(kind: CodecKind) -> Result<(), TransferError> {
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "raptor-q", feature = "raptor-10"))]
+    #[cfg(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp"))]
     fn sample_object(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i % 251) as u8).collect()
     }
@@ -775,6 +891,43 @@ mod tests {
             assert_eq!(dec.decode_status(), DecodeStatus::Decoded);
             assert_eq!(dec.recover_object().expect("recover"), object);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "bhp")]
+    fn roundtrip_bhp_with_storage_manager() {
+        let spec = TransferSpec::new(77, 8, CodecKind::Bhp).expect("bhp spec");
+        let object = sample_object(spec.transfer_length_f);
+        let mut storage = SlabStorageManager::new(spec.symbol_size_t);
+        let mut enc =
+            TransferEncoderImpl::new_with_storage_manager(spec.clone(), &object, &storage)
+                .expect("encoder");
+        let mut dec =
+            TransferDecoderImpl::new_with_storage_manager(spec.clone(), &storage).expect("decoder");
+
+        let source = enc.source_packets();
+        for packet in source.iter().skip(1) {
+            let handle = storage.store_packet(packet.clone());
+            let status = dec
+                .add_packet(storage.packet(handle).expect("packet in manager"))
+                .expect("add source packet");
+            if status == DecodeStatus::Decoded {
+                break;
+            }
+        }
+        let repairs = enc.repair_packets(0, 64);
+        for repair in repairs {
+            let handle = storage.store_packet(repair);
+            let status = dec
+                .add_packet(storage.packet(handle).expect("packet in manager"))
+                .expect("add repair packet");
+            if status == DecodeStatus::Decoded {
+                break;
+            }
+        }
+
+        assert_eq!(dec.decode_status(), DecodeStatus::Decoded);
+        assert_eq!(dec.recover_object().expect("recover"), object);
     }
 
     #[test]
@@ -868,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
     fn disabled_codecs_return_an_actionable_error() {
         for kind in [CodecKind::RaptorQ, CodecKind::Raptor10] {
             assert_eq!(

@@ -7,6 +7,7 @@ pub const WIRE_VERSION: u8 = 1;
 
 pub const CODEC_RAPTOR_Q: u8 = 0;
 pub const CODEC_RAPTOR_10: u8 = 1;
+pub const CODEC_BHP: u8 = 2;
 
 /// Top-level UDP payload: session metadata once, then packets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +66,7 @@ pub fn session_meta_from_spec(session_id: u64, spec: &TransferSpec) -> WireMessa
     let codec = match spec.codec_kind() {
         CodecKind::RaptorQ => CODEC_RAPTOR_Q,
         CodecKind::Raptor10 => CODEC_RAPTOR_10,
+        CodecKind::Bhp => CODEC_BHP,
     };
     WireMessage::SessionMeta {
         version: WIRE_VERSION,
@@ -94,6 +96,7 @@ pub fn spec_from_session_meta(meta: &WireMessage) -> Result<TransferSpec, Protoc
     let kind = match *codec {
         CODEC_RAPTOR_Q => CodecKind::RaptorQ,
         CODEC_RAPTOR_10 => CodecKind::Raptor10,
+        CODEC_BHP => CodecKind::Bhp,
         other => return Err(ProtocolError::UnknownCodec(other)),
     };
     Ok(TransferSpec::new(transfer_length_f, symbol_size_t, kind)?)
@@ -147,8 +150,9 @@ pub fn codec_kind_from_cli(name: &str) -> Result<CodecKind, String> {
     match name.to_ascii_lowercase().as_str() {
         "raptorq" | "raptor-q" | "rfc6330" => Ok(CodecKind::RaptorQ),
         "raptor10" | "raptor-10" | "rfc5053" => Ok(CodecKind::Raptor10),
+        "bhp" | "binary-hdpc-pi" | "binary_hdpc_pi" => Ok(CodecKind::Bhp),
         other => Err(format!(
-            "unknown codec {other:?}; use raptorq or raptor10"
+            "unknown codec {other:?}; use raptorq, raptor10, or bhp"
         )),
     }
 }
@@ -199,5 +203,15 @@ mod tests {
         let restored = spec_from_session_meta(&meta).expect("spec");
         assert_eq!(restored.transfer_length_f, spec.transfer_length_f);
         assert_eq!(restored.codec_kind(), CodecKind::Raptor10);
+    }
+
+    #[test]
+    #[cfg(feature = "bhp")]
+    fn spec_from_meta_roundtrip_bhp() {
+        let spec = TransferSpec::new(77, 8, CodecKind::Bhp).expect("spec");
+        let meta = session_meta_from_spec(99, &spec);
+        let restored = spec_from_session_meta(&meta).expect("spec");
+        assert_eq!(restored.transfer_length_f, spec.transfer_length_f);
+        assert_eq!(restored.codec_kind(), CodecKind::Bhp);
     }
 }

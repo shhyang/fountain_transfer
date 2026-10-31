@@ -6,7 +6,7 @@ version = "2.0.0"
 edition = "2024"
 authors = ["Shenghao Yang"]
 license = "MIT"
-description = "Library-first transfer facade over RaptorQ and Raptor10 codecs"
+description = "Library-first transfer facade over RaptorQ, Raptor10, and optional BHP codecs"
 readme = "README.md"
 repository = "https://github.com/shhyang/fountain_transfer"
 documentation = "https://github.com/shhyang/fountain_transfer/tree/main/fountain_transfer_core"
@@ -17,9 +17,12 @@ categories = ["algorithms", "encoding", "network-programming"]
 default = ["raptor-q", "raptor-10"]
 raptor-q = ["dep:fountain_scheme"]
 raptor-10 = ["dep:fountain_scheme"]
+# Optional BHP (BinaryHdpcPi); not enabled by default. Requires fountain_scheme >= 2.2.
+bhp = ["dep:fountain_scheme"]
 
 [dependencies]
 fountain_engine = "2.1"
 fountain_utility = "2.1"
 fountain_operators = { version = "2.0", default-features = false }
-fountain_scheme = { version = "2.1", optional = true }
+# Path sibling for local BHP (scheme 2.2); crates.io still at 2.1 until publish.
+fountain_scheme = { path = "../../fountain_scheme", version = "2.2", optional = true }

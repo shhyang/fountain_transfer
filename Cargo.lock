@@ -180,9 +180,7 @@ dependencies = [
 
 [[package]]
 name = "fountain_scheme"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "998b90e428927ae871b27ab4e0e219e6be0d3532f379cbe20aaf514fa44d7054"
+version = "2.2.0"
 dependencies = [
  "fountain_engine",
  "fountain_utility",
