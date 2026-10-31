@@ -1,7 +1,7 @@
 # Publishing fountain_transfer (single GitHub repo)
 
 One GitHub repository contains **both** `fountain_transfer_core` and `fountain_transfer`.  
-Published Raptor scheme crates (`fountain_raptor_q`, `fountain_raptor_10`) are **not** modified.
+RFC scheme math comes from `fountain_scheme` 2.1+ under `rfc::{rq,r10}`.
 
 ---
 

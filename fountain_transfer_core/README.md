@@ -65,11 +65,12 @@ assert_eq!(dec.recover_object()?, object);
 | Type | Role |
 |------|------|
 | [`TransferSpec`](src/lib.rs) | Object length `F`, symbol size `T`, and [`CodecConfig`](src/lib.rs); use [`TransferSpec::new`](src/lib.rs) with [`CodecKind`](src/lib.rs) |
-| [`codec_config_from_kind`](src/lib.rs) | Build [`CodecConfig`] from kind (RaptorQ LDPC and degree settings are fixed in this crate) |
+| [`codec_config_from_kind`](src/lib.rs) | Build [`CodecConfig`] from kind ([`DEFAULT_DMAX`](src/lib.rs) and RaptorQ LDPC fixed in this crate) |
+| [`DEFAULT_DMAX`](src/lib.rs) | Default `dmax` (30) for both codecs in this facade |
 | [`CodecKind`](src/lib.rs) | `RaptorQ` / `Raptor10` |
 | [`DecodeStatus`](src/lib.rs) | Re-exported from `fountain_engine` for decode progress |
 
-Codec internals (including maximum degree and RaptorQ LDPC) are **not** part of the [`fountain_transfer`](../fountain_transfer/) API; that crate uses [`CodecKind`](src/lib.rs), symbol size, and [`TransferSpec::new`](src/lib.rs) only.
+RaptorQ LDPC and `dmax` are **not** part of the [`fountain_transfer`](../fountain_transfer/) API; that crate uses [`CodecKind`](src/lib.rs), symbol size, and [`TransferSpec::new`](src/lib.rs) only.
 
 ### Packets
 
@@ -124,14 +125,14 @@ Covers dual-codec roundtrip with `StorageManager`, simulated packet loss, and ma
 
 ## RFC packet codec (in this crate)
 
-Transfer codecs and layout live here, not in the published scheme crates:
+Z=1 transfer codecs and layout live here, not in the published scheme crates:
 
 | Module | Role |
 |--------|------|
 | `rfc6330_layout`, `rfc6330_mapping`, `rfc6330_codec` | RaptorQ object blocking, ESI mapping, `Rfc6330Encoder` / `Rfc6330Decoder` |
 | `rfc5053_layout`, `rfc5053_codec` | Raptor10 layout and `Rfc5053Encoder` / `Rfc5053Decoder` |
 
-[`fountain_raptor_q`](https://github.com/wutongabc/fountain_raptor_q) and [`fountain_raptor_10`](https://github.com/wutongabc/fountain_raptor_10) supply scheme math only (`raptor_q_main`, `Raptor10SysCode`, padding wrappers). No changes are required to those published crates for transfer.
+[`fountain_scheme`](https://github.com/shhyang/fountain_scheme) 2.1+ supplies the RFC scheme math through `fountain_scheme::rfc::rq` (`RaptorQSysCode`, padding wrappers) and `fountain_scheme::rfc::r10` (`Raptor10SysCode`).
 
 ## Publishing (single GitHub repo)
 
@@ -152,7 +153,7 @@ For crates.io (optional), publish **`fountain_transfer_core` first**, then **`fo
 ## Related
 
 - [fountain_transfer](../fountain_transfer/) — UDP CLI (`fountain send` / `recv`)
-- [raptor_q](../raptor_q/) / [raptor_10](../raptor_10/) — scheme layer (matches published `fountain_raptor_*`)
+- [`fountain_scheme::rfc`](https://docs.rs/fountain_scheme/latest/fountain_scheme/rfc/) — RFC scheme layer (`rq` / `r10`)
 - [docs/plans/fountain-transfer.md](../docs/plans/fountain-transfer.md) — roadmap
 
 ## License

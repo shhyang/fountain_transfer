@@ -32,10 +32,10 @@ cargo run -p fountain_transfer -- send ./myfile.bin 127.0.0.1:7878
 This repo depends on crates.io / GitHub packages, not the full monorepo:
 
 - `fountain_engine`, `fountain_utility` (crates.io)
-- `fountain_raptor_q`, `fountain_raptor_10` (crates.io)
+- `fountain_scheme` 2.1+ (crates.io) — RFC scheme math under `rfc::{rq,r10}`
 - `fountain_operators` ([GitHub](https://github.com/shhyang/fountain_operators)) — portable `SlabDataOperator` only (`default-features = false`; no `simd` feature)
 
-RFC object layout and packet codecs live in **`fountain_transfer_core`**; the Raptor scheme crates are unchanged.
+RFC object layout and packet codecs live in **`fountain_transfer_core`**; `fountain_scheme` supplies the RFC scheme math.
 
 ## Tests
 
