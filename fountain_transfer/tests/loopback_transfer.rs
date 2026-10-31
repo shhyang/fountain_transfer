@@ -1,9 +1,11 @@
 //! End-to-end loopback UDP transfer with SHA-256 verification.
 
+#![cfg(any(feature = "raptor-q", feature = "raptor-10"))]
+
 use std::time::Duration;
 
 use fountain_transfer::{
-    receive_object_with_socket, send_object_with_socket, RecvConfig, SendConfig, SessionParams,
+    RecvConfig, SendConfig, SessionParams, receive_object_with_socket, send_object_with_socket,
 };
 use fountain_transfer_core::CodecKind;
 use sha2::{Digest, Sha256};
@@ -27,13 +29,8 @@ async fn loopback_transfer(codec: CodecKind, object_len: usize, symbol_size: usi
     let recv_socket = UdpSocket::bind("127.0.0.1:0").await.expect("bind recv");
     let listen_addr = recv_socket.local_addr().expect("local addr");
 
-    let session = SessionParams::from_file_and_cli(
-        session_id,
-        object.len(),
-        symbol_size,
-        codec,
-    )
-    .expect("session params");
+    let session = SessionParams::from_file_and_cli(session_id, object.len(), symbol_size, codec)
+        .expect("session params");
 
     let send_config = SendConfig {
         repair_count: 128,

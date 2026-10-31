@@ -38,6 +38,8 @@ The receiver listens on `0.0.0.0:7878` by default. Codec and symbol size are sen
 
 The command line uses positional paths and destinations: `send <path> <host:port>` and `recv <output>`. `cargo install fountain_transfer` will be available when the crates are published to crates.io.
 
+The legacy `--addr` and `-o` forms are no longer rewritten into positionals. Use the forms above so argument errors and help text stay consistent.
+
 ## Commands
 
 | Command | Description |
@@ -51,14 +53,22 @@ The command line uses positional paths and destinations: `send <path> <host:port
 |------|---------|-------|
 | `--listen` | `0.0.0.0:7878` | Recv bind address |
 | `--codec` | `raptorq` | `raptorq` or `raptor10` |
-| `--symbol-size` | `1400` | Bytes per fountain symbol |
-| `--repair-count` | `256` | Repair symbols per round |
-| `--repair-rounds` | `1` | Repeat repair generation |
+| `--symbol-size` | `1400` | Bytes per fountain symbol; must be at least 1 |
+| `--repair-count` | `256` | Repair symbols per round; `0` sends source symbols only |
+| `--repair-rounds` | `1` | Number of repair rounds; `0` sends source symbols only |
 | `--session-id` | random (send) | Fixed ID when filtering multiple sessions |
-| `--timeout-secs` | `60` | Recv idle timeout |
+| `--timeout-secs` | `60` | Recv idle timeout; must be at least 1 |
 | `--delay-ms` | `0` | Inter-packet delay on send |
 
-## Wire format (v0.1)
+## Status and exit codes
+
+Both commands write progress to stderr, leaving stdout available for scripting. Runtime validation and transfer failures exit with status `1`. Invalid command-line syntax exits with status `2`, matching clap conventions. Successful completion exits with status `0`.
+
+CLI errors identify the failing input, destination, or output path. Receive timeouts suggest checking startup order, ports, session IDs, and `--timeout-secs`.
+
+UDP does not acknowledge delivery. `finished sending` means the local socket accepted every datagram; confirm recovery by checking the receiver's completion line and the output file.
+
+## Wire format (version 1)
 
 UDP payloads are bincode-serialized [`WireMessage`](src/protocol.rs):
 
@@ -79,6 +89,8 @@ Example — RaptorQ-only CLI build:
 ```bash
 cargo build -p fountain_transfer --no-default-features --features raptor-q
 ```
+
+With neither codec feature enabled, the CLI still builds for documentation and error-path tooling, but `send` fails for either codec with an instruction naming the missing Cargo feature.
 
 ## Tests
 
@@ -134,8 +146,9 @@ The library and CLI depend on the MIT-licensed `fountain_engine` 2.1, `fountain_
 ### Expected success output
 
 ```text
-listening on 0.0.0.0:7878, writing to received.bin
-sent 51200 bytes to 127.0.0.1:7878 (session 42424242, codec raptorq)
+waiting on 0.0.0.0:7878 (60s idle timeout), writing to received.bin
+sending 51200 bytes from ./myfile.bin to 127.0.0.1:7878 (session 42424242, codec raptorq, symbol size 1400 B)
+finished sending 51200 bytes to 127.0.0.1:7878
 received 51200 bytes on 0.0.0.0:7878 from 127.0.0.1:53445 (37 packets)
 ```
 

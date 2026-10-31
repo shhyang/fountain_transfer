@@ -1,59 +1,161 @@
 //! `fountain` CLI binary.
 
-use std::net::ToSocketAddrs;
-use std::path::PathBuf;
+use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use fountain_transfer::{
-    codec_kind_from_cli, random_session_id, receive_to_file, send_file, RecvConfig, SendConfig,
-    SessionParams,
+    NetError, RecvConfig, SendConfig, SessionParams, codec_kind_from_cli, random_session_id,
+    receive_object, send_object,
 };
+use fountain_transfer_core::TransferError;
 
-#[derive(Parser)]
-#[command(name = "fountain", about = "Rateless UDP file transfer", version)]
+#[derive(Debug, Parser)]
+#[command(
+    name = "fountain",
+    about = "Rateless UDP file transfer",
+    long_about = "Send a file as RaptorQ or Raptor10 fountain-coded UDP packets.\n\
+                  Start the receiver first, then run the sender.",
+    version,
+    arg_required_else_help = true,
+    after_help = "Examples:\n  \
+                  fountain recv received.bin\n  \
+                  fountain send ./myfile.bin 192.168.1.20:7878\n\n\
+                  UDP is connectionless: a successful send does not confirm that the receiver \
+                  recovered the file."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// Read a file and send fountain-coded symbols over UDP.
     Send {
+        /// File to read and encode.
         #[arg(value_name = "PATH")]
         path: PathBuf,
+
+        /// Receiver endpoint, such as 192.168.1.20:7878.
         #[arg(value_name = "HOST:PORT")]
         addr: String,
-        #[arg(long, default_value = "raptorq")]
+
+        /// Codec to use: raptorq (RFC 6330) or raptor10 (RFC 5053).
+        #[arg(long, default_value = "raptorq", value_name = "CODEC")]
         codec: String,
-        #[arg(long, default_value_t = 1400)]
-        symbol_size: usize,
-        #[arg(long, default_value_t = 256)]
+
+        /// Bytes in each encoded symbol; the receiver learns this value automatically.
+        #[arg(
+            long,
+            default_value_t = 1400,
+            value_name = "BYTES",
+            value_parser = clap::value_parser!(u16).range(1..)
+        )]
+        symbol_size: u16,
+
+        /// Repair symbols per round. Use 0 to send source symbols only.
+        #[arg(long, default_value_t = 256, value_name = "COUNT")]
         repair_count: usize,
-        #[arg(long, default_value_t = 1)]
+
+        /// Number of repair rounds. Use 0 to send source symbols only.
+        #[arg(long, default_value_t = 1, value_name = "COUNT")]
         repair_rounds: usize,
-        #[arg(long)]
+
+        /// Fixed session identifier. Defaults to a random identifier.
+        #[arg(long, value_name = "ID")]
         session_id: Option<u64>,
-        #[arg(long, default_value_t = 0)]
+
+        /// Delay after each datagram, in milliseconds.
+        #[arg(long, default_value_t = 0, value_name = "MILLISECONDS")]
         delay_ms: u64,
     },
-    /// Listen for symbols and write the recovered object.
+
+    /// Listen for symbols and write the recovered file.
     Recv {
+        /// Destination file; an existing file is overwritten after decoding succeeds.
         #[arg(value_name = "PATH")]
         output: PathBuf,
+
+        /// Local UDP address to bind.
         #[arg(long, value_name = "HOST:PORT", default_value = "0.0.0.0:7878")]
         listen: String,
-        #[arg(long)]
+
+        /// Accept only this session identifier. By default, use the sender's session.
+        #[arg(long, value_name = "ID")]
         session_id: Option<u64>,
-        #[arg(long, default_value_t = 60)]
+
+        /// Exit if no matching datagram arrives for this many seconds.
+        #[arg(
+            long,
+            default_value_t = 60,
+            value_name = "SECONDS",
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
         timeout_secs: u64,
     },
 }
 
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    #[error("cannot read input file `{path}`: {source}")]
+    ReadInput {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("invalid --codec value: {0}")]
+    InvalidCodec(String),
+    #[error("invalid transfer settings: {0}")]
+    TransferSettings(#[from] TransferError),
+    #[error("invalid destination `{addr}`; expected HOST:PORT such as 192.168.1.20:7878: {source}")]
+    ResolveAddress {
+        addr: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("send to {dest} failed: {source}")]
+    Send {
+        dest: SocketAddr,
+        #[source]
+        source: NetError,
+    },
+    #[error(
+        "receive timed out: no matching datagram arrived within {wait:?}; start `fountain recv` \
+         before sending, check the sender's HOST:PORT and --session-id, or increase \
+         --timeout-secs"
+    )]
+    ReceiveTimeout { wait: Duration },
+    #[error("receive on `{listen}` failed: {source}")]
+    Receive {
+        listen: String,
+        #[source]
+        source: NetError,
+    },
+    #[error("cannot write output file `{path}`: {source}")]
+    WriteOutput {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse_from(normalize_cli_args(std::env::args().collect()));
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Commands::Send {
             path,
@@ -65,29 +167,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             session_id,
             delay_ms,
         } => {
-            let object = std::fs::read(&path)?;
-            let codec_kind = codec_kind_from_cli(&codec).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+            let codec_kind = codec_kind_from_cli(&codec).map_err(CliError::InvalidCodec)?;
+            let dest = resolve_addr(&addr)?;
+            let object = std::fs::read(&path).map_err(|source| CliError::ReadInput {
+                path: path.clone(),
+                source,
             })?;
             let session_id = session_id.unwrap_or_else(random_session_id);
             let session = SessionParams::from_file_and_cli(
                 session_id,
                 object.len(),
-                symbol_size,
+                usize::from(symbol_size),
                 codec_kind,
-            )
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Unsupported, e.to_string()))?;
-            let dest = resolve_addr(&addr)?;
+            )?;
             let config = SendConfig {
                 repair_count,
                 repair_rounds,
                 inter_packet_delay: Duration::from_millis(delay_ms),
             };
-            send_file(&path, dest, &session, &config).await?;
+
             eprintln!(
-                "sent {} bytes to {dest} (session {session_id}, codec {codec})",
-                object.len()
+                "sending {} bytes from {} to {dest} (session {session_id}, codec {codec}, \
+                 symbol size {symbol_size} B)",
+                object.len(),
+                path.display()
             );
+            send_object(&object, dest, &session, &config)
+                .await
+                .map_err(|source| CliError::Send { dest, source })?;
+            eprintln!("finished sending {} bytes to {dest}", object.len());
         }
         Commands::Recv {
             output,
@@ -95,15 +203,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             session_id,
             timeout_secs,
         } => {
+            let wait = Duration::from_secs(timeout_secs);
             eprintln!(
-                "listening on {listen}, writing to {}",
+                "waiting on {listen} ({timeout_secs}s idle timeout), writing to {}",
                 output.display()
             );
             let config = RecvConfig {
-                recv_timeout: Duration::from_secs(timeout_secs),
+                recv_timeout: wait,
                 expected_session_id: session_id,
             };
-            let outcome = receive_to_file(&listen, &output, &config).await?;
+            let outcome = receive_object(&listen, &config)
+                .await
+                .map_err(|error| map_receive_error(error, listen))?;
+            write_output(&output, &outcome.object)?;
             eprintln!(
                 "received {} bytes on {} from {} ({} packets)",
                 outcome.object.len(),
@@ -116,92 +228,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn resolve_addr(addr: &str) -> Result<std::net::SocketAddr, std::io::Error> {
-    addr.to_socket_addrs()?
+fn map_receive_error(error: NetError, listen: String) -> CliError {
+    match error {
+        NetError::Timeout(wait) => CliError::ReceiveTimeout { wait },
+        source => CliError::Receive { listen, source },
+    }
+}
+
+fn resolve_addr(addr: &str) -> Result<SocketAddr, CliError> {
+    addr.to_socket_addrs()
+        .map_err(|source| CliError::ResolveAddress {
+            addr: addr.to_owned(),
+            source,
+        })?
         .next()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid address"))
+        .ok_or_else(|| CliError::ResolveAddress {
+            addr: addr.to_owned(),
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "address resolved to no endpoints",
+            ),
+        })
 }
 
-/// Map legacy flags (`--addr`, `-o` / `--output`) to positional args for clap.
-fn normalize_cli_args(mut args: Vec<String>) -> Vec<String> {
-    let Some(subcommand) = args.get(1).map(String::as_str) else {
-        return args;
-    };
-
-    match subcommand {
-        "send" => hoist_flag_value(&mut args, "--addr", 3),
-        "recv" => {
-            hoist_flag_value(&mut args, "--output", 2);
-            hoist_flag_value(&mut args, "-o", 2);
-        }
-        _ => {}
-    }
-
-    args
-}
-
-/// If `flag` is present, remove it and insert its value at `insert_at`.
-fn hoist_flag_value(args: &mut Vec<String>, flag: &str, insert_at: usize) {
-    let Some(flag_idx) = args.iter().position(|arg| arg == flag) else {
-        return;
-    };
-    if flag_idx + 1 >= args.len() {
-        return;
-    }
-    let value = args.remove(flag_idx + 1);
-    args.remove(flag_idx);
-    let insert_at = insert_at.min(args.len());
-    args.insert(insert_at, value);
+fn write_output(path: &Path, object: &[u8]) -> Result<(), CliError> {
+    std::fs::write(path, object).map_err(|source| CliError::WriteOutput {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_cli_args;
+    use super::{Cli, CliError, Commands, resolve_addr};
+    use clap::Parser;
 
-    fn s(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
+    #[test]
+    fn send_defaults_are_stable() {
+        let cli = Cli::try_parse_from(["fountain", "send", "file.bin", "127.0.0.1:7878"])
+            .expect("valid send arguments");
+        let Commands::Send {
+            codec,
+            symbol_size,
+            repair_count,
+            repair_rounds,
+            delay_ms,
+            ..
+        } = cli.command
+        else {
+            panic!("expected send command");
+        };
+
+        assert_eq!(codec, "raptorq");
+        assert_eq!(symbol_size, 1400);
+        assert_eq!(repair_count, 256);
+        assert_eq!(repair_rounds, 1);
+        assert_eq!(delay_ms, 0);
     }
 
     #[test]
-    fn send_positional_addr() {
-        let args = normalize_cli_args(s(&[
+    fn rejects_zero_timeout_and_symbol_size() {
+        let timeout = Cli::try_parse_from(["fountain", "recv", "out.bin", "--timeout-secs", "0"])
+            .expect_err("zero timeout must be rejected");
+        assert_eq!(timeout.exit_code(), 2);
+
+        let symbol_size = Cli::try_parse_from([
             "fountain",
             "send",
             "file.bin",
             "127.0.0.1:7878",
-        ]));
-        assert_eq!(
-            args,
-            s(&["fountain", "send", "file.bin", "127.0.0.1:7878"])
-        );
+            "--symbol-size",
+            "0",
+        ])
+        .expect_err("zero symbol size must be rejected");
+        assert_eq!(symbol_size.exit_code(), 2);
     }
 
     #[test]
-    fn send_legacy_addr_flag() {
-        let args = normalize_cli_args(s(&[
-            "fountain",
-            "send",
-            "file.bin",
-            "--addr",
-            "127.0.0.1:7878",
-        ]));
-        assert_eq!(
-            args,
-            s(&["fountain", "send", "file.bin", "127.0.0.1:7878"])
-        );
-    }
-
-    #[test]
-    fn recv_positional_output() {
-        let args = normalize_cli_args(s(&["fountain", "recv", "out.bin"]));
-        assert_eq!(args, s(&["fountain", "recv", "out.bin"]));
-    }
-
-    #[test]
-    fn recv_legacy_output_flags() {
-        for flag in ["-o", "--output"] {
-            let args = normalize_cli_args(s(&["fountain", "recv", flag, "out.bin"]));
-            assert_eq!(args, s(&["fountain", "recv", "out.bin"]), "flag {flag}");
-        }
+    fn invalid_destination_has_actionable_message() {
+        let error = resolve_addr("not-a-socket").expect_err("invalid address");
+        let message = error.to_string();
+        let CliError::ResolveAddress { addr, .. } = error else {
+            panic!("expected address error");
+        };
+        assert_eq!(addr, "not-a-socket");
+        assert!(message.contains("expected HOST:PORT"));
     }
 }
