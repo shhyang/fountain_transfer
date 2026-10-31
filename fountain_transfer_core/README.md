@@ -1,13 +1,26 @@
 # fountain_transfer_core
 
-MIT library that unifies **RaptorQ** (RFC 6330) and **Raptor10** (RFC 5053) behind a single transfer-oriented API.
+MIT library that unifies **RaptorQ** (RFC 6330) and **Raptor10** (RFC 5053) behind a transfer-oriented encoder and decoder API.
+
+This crate produces and consumes RFC-style packets (`sbn`, `esi`, symbol bytes) but does not perform networking or file I/O. The [`fountain_transfer`](https://github.com/shhyang/fountain_transfer/tree/main/fountain_transfer) crate adds UDP framing and a CLI.
+
+## Dependency versions
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| [`fountain_engine`](https://docs.rs/fountain_engine) | 2.1 | Encoder, decoder, and operator traits |
+| [`fountain_utility`](https://docs.rs/fountain_utility) | 2.1 | Portable vector and padding utilities |
+| [`fountain_operators`](https://docs.rs/fountain_operators) | 2.0 | Slab operator adapter, with default features and SIMD disabled |
+| [`fountain_scheme`](https://docs.rs/fountain_scheme) | 2.1 | RFC scheme math under `rfc::{rq,r10}` |
+
+All of these open-source dependencies are MIT-licensed.
 
 ## Cargo features
 
 | Feature | Default | Enables |
 |---------|---------|---------|
-| `raptor-q` | yes | `raptor_q` codec, [`CodecConfig::RaptorQ`] (default reversed LDPC inside the crate) |
-| `raptor-10` | yes | `raptor_10` codec, [`CodecConfig::Raptor10`] |
+| `raptor-q` | yes | RFC 6330 through `fountain_scheme::rfc::rq` and `CodecConfig::RaptorQ` |
+| `raptor-10` | yes | RFC 5053 through `fountain_scheme::rfc::r10` and `CodecConfig::Raptor10` |
 
 RaptorQ only:
 
@@ -21,141 +34,111 @@ Raptor10 only:
 cargo build -p fountain_transfer_core --no-default-features --features raptor-10
 ```
 
-Selecting a disabled codec returns [`TransferError::CodecNotEnabled`](src/lib.rs). It is the codec layer for [`fountain_transfer`](../fountain_transfer/) and any other front-end (tests, FLUTE bindings, custom transports).
-
-**This crate does not perform networking or file I/O** — it produces and consumes RFC-style packets (`sbn`, `esi`, symbol bytes).
-
-## License note
-
-`fountain_transfer_core` is **MIT**, but it links **AGPL-3.0** [`fountain_engine`](../fountain_engine/) in-process when using the default or `fountain_operators` backends. Document that dependency in applications you ship.
+Selecting a disabled codec returns `TransferError::CodecNotEnabled`.
 
 ## Quick start
 
 ```rust
-use fountain_engine::types::DecodeStatus;
 use fountain_transfer_core::{
-    CodecKind, SlabStorageManager, StorageManager, TransferDecoder, TransferDecoderImpl,
-    TransferEncoder, TransferEncoderImpl, TransferSpec,
+    CodecKind, DecodeStatus, TransferDecoder, TransferDecoderImpl, TransferEncoder,
+    TransferEncoderImpl, TransferSpec,
 };
 
-let object: Vec<u8> = (0..199).map(|i| (i % 251) as u8).collect();
-let spec = TransferSpec::new(object.len(), 10, CodecKind::RaptorQ)?;
+fn main() -> Result<(), fountain_transfer_core::TransferError> {
+    let object: Vec<u8> = (0..199).map(|i| (i % 251) as u8).collect();
+    let spec = TransferSpec::new(object.len(), 10, CodecKind::RaptorQ)?;
 
-let mut enc = TransferEncoderImpl::new(spec.clone(), &object)?;
-let mut dec = TransferDecoderImpl::new(spec)?;
+    let mut enc = TransferEncoderImpl::new(spec.clone(), &object)?;
+    let mut dec = TransferDecoderImpl::new(spec)?;
 
-for packet in enc.source_packets() {
-    if dec.add_packet(&packet)? == DecodeStatus::Decoded {
-        break;
+    for packet in enc.source_packets() {
+        if dec.add_packet(&packet)? == DecodeStatus::Decoded {
+            break;
+        }
     }
-}
-for packet in enc.repair_packets(0, 64) {
-    if dec.add_packet(&packet)? == DecodeStatus::Decoded {
-        break;
+    for packet in enc.repair_packets(0, 64) {
+        if dec.add_packet(&packet)? == DecodeStatus::Decoded {
+            break;
+        }
     }
-}
 
-assert_eq!(dec.recover_object()?, object);
+    assert_eq!(dec.recover_object()?, object);
+    Ok(())
+}
 ```
 
-## Public API
+## Configuration
 
-### Configuration
+`CodecConfig` is a struct-variant enum in version 2:
+
+```rust
+use fountain_transfer_core::{CodecConfig, DEFAULT_DMAX, LDPCType};
+
+let raptor_q = CodecConfig::RaptorQ {
+    dmax: DEFAULT_DMAX,
+    ldpc_type: LDPCType::ReversedLDPC,
+};
+
+let raptor_10 = CodecConfig::Raptor10 {
+    dmax: DEFAULT_DMAX,
+};
+```
+
+`TransferSpec::new` uses `DEFAULT_DMAX` (30) and the default reversed LDPC precode. Construct a `TransferSpec` literal when custom codec parameters are needed. `LDPCType` is re-exported from `fountain_scheme::rfc::rq`.
+
+The CLI intentionally exposes only a codec choice and symbol size; these lower-level settings are library configuration.
+
+## Main API
 
 | Type | Role |
 |------|------|
-| [`TransferSpec`](src/lib.rs) | Object length `F`, symbol size `T`, and [`CodecConfig`](src/lib.rs); use [`TransferSpec::new`](src/lib.rs) with [`CodecKind`](src/lib.rs) |
-| [`codec_config_from_kind`](src/lib.rs) | Build [`CodecConfig`] from kind ([`DEFAULT_DMAX`](src/lib.rs) and RaptorQ LDPC fixed in this crate) |
-| [`DEFAULT_DMAX`](src/lib.rs) | Default `dmax` (30) for both codecs in this facade |
-| [`CodecKind`](src/lib.rs) | `RaptorQ` / `Raptor10` |
-| [`DecodeStatus`](src/lib.rs) | Re-exported from `fountain_engine` for decode progress |
-
-RaptorQ LDPC and `dmax` are **not** part of the [`fountain_transfer`](../fountain_transfer/) API; that crate uses [`CodecKind`](src/lib.rs), symbol size, and [`TransferSpec::new`](src/lib.rs) only.
-
-### Packets
-
-| Type | Fields |
-|------|--------|
-| [`TransferPacket`](src/lib.rs) | `sbn`, `esi`, `symbol` — RFC payload identity, **not** engine `coded_id` |
-
-### Encoder / decoder
-
-| Trait | Implementations | Methods |
-|-------|-----------------|---------|
-| [`TransferEncoder`](src/lib.rs) | [`TransferEncoderImpl`](src/lib.rs) | `source_packets()`, `repair_packets(start, count)` |
-| [`TransferDecoder`](src/lib.rs) | [`TransferDecoderImpl`](src/lib.rs) | `add_packet()`, `decode_status()`, `recover_object()` |
+| `TransferSpec` | Object length `F`, symbol size `T`, and `CodecConfig` |
+| `CodecKind` | `RaptorQ` or `Raptor10` |
+| `CodecConfig` | Codec-specific `dmax`, plus RaptorQ `ldpc_type` |
+| `TransferPacket` | `{ sbn, esi, symbol }` using RFC payload identity, not internal engine coded IDs |
+| `TransferEncoder` / `TransferEncoderImpl` | `source_packets()` and `repair_packets(start, count)` |
+| `TransferDecoder` / `TransferDecoderImpl` | `add_packet()`, `decode_status()`, and `recover_object()` |
+| `StorageManager` / `SlabStorageManager` | Optional data-operator and packet storage integration |
+| `DecodeStatus` | Re-exported engine decode state |
 
 Constructors:
 
-- `TransferEncoderImpl::new(spec, object)` — default in-process operator
-- `TransferEncoderImpl::new_with_storage_manager(spec, object, manager)`
-- `TransferDecoderImpl::new(spec)`
-- `TransferDecoderImpl::new_with_storage_manager(spec, manager)`
+- `TransferEncoderImpl::new(spec, object)` uses `fountain_utility`'s vector operator.
+- `TransferEncoderImpl::new_with_storage_manager(spec, object, manager)` uses the supplied operator.
+- `TransferDecoderImpl::new(spec)` uses the default vector operator.
+- `TransferDecoderImpl::new_with_storage_manager(spec, manager)` uses the supplied operator.
 
-`recover_object()` returns [`TransferError::DecodeNotComplete`](src/lib.rs) until [`DecodeStatus::Decoded`](https://docs.rs/fountain_engine) (from `fountain_engine`).
+`recover_object()` returns `TransferError::DecodeNotComplete` until decoding reaches `DecodeStatus::Decoded`.
 
-### Storage / operators
+## RFC packet layer
 
-| Type | Role |
-|------|------|
-| [`StorageManager`](src/lib.rs) | Trait: `symbol_size()`, `new_operator()`, optional packet store |
-| [`SlabStorageManager`](src/lib.rs) | Optional adapter — portable [`SlabDataOperator`](https://github.com/shhyang/fountain_operators) via `fountain_operators` (no SIMD unless you enable `simd` on that crate yourself) |
+RFC object layout and packet codecs remain in this crate:
 
-Pass a shared `SlabStorageManager` to both encoder and decoder constructors to use the same slab backend and optionally retain packets by handle.
+| Module | Role |
+|--------|------|
+| `rfc6330_layout`, `rfc6330_mapping`, `rfc6330_codec` | RaptorQ object blocking, ESI mapping, `Rfc6330Encoder`, and `Rfc6330Decoder` |
+| `rfc5053_layout`, `rfc5053_codec` | Raptor10 layout, `Rfc5053Encoder`, and `Rfc5053Decoder` |
 
-Default encode/decode (`TransferEncoderImpl::new` / `TransferDecoderImpl::new`) uses [`VecDataOperater`](https://docs.rs/fountain_utility) from `fountain_utility`, not slab operators.
+The scheme implementations come from `fountain_scheme` 2.1+:
 
-### Errors
+- `fountain_scheme::rfc::rq::{RaptorQSysCode, RaptorQEncoder, RaptorQDecoder, LDPCType}`
+- `fountain_scheme::rfc::r10::{Raptor10SysCode, Raptor10Encoder, Raptor10Decoder}`
 
-[`TransferError`](src/lib.rs) covers invalid lengths, `sbn != 0` (v1), symbol size mismatch, and decode-not-complete. Malformed input should surface as `Err`, not panic.
+## Limitations
 
-## v1 limitations
-
-- Single source block: **`sbn == 0` only**
-- No wire/session/OTI types in this crate (see `fountain_transfer` for UDP framing)
-- No `fountain_scheme` LT/LDPC path — Raptor codecs only
+- Single source block: `sbn == 0` only.
+- No session, wire, or object-transmission-information types; see `fountain_transfer` for a UDP example.
+- No networking or file I/O in this crate.
 
 ## Tests
 
 ```bash
 cargo test -p fountain_transfer_core
+cargo clippy -p fountain_transfer_core --all-targets -- -D warnings
 ```
 
-Covers dual-codec roundtrip with `StorageManager`, simulated packet loss, and malformed-packet rejection.
-
-## RFC packet codec (in this crate)
-
-Z=1 transfer codecs and layout live here, not in the published scheme crates:
-
-| Module | Role |
-|--------|------|
-| `rfc6330_layout`, `rfc6330_mapping`, `rfc6330_codec` | RaptorQ object blocking, ESI mapping, `Rfc6330Encoder` / `Rfc6330Decoder` |
-| `rfc5053_layout`, `rfc5053_codec` | Raptor10 layout and `Rfc5053Encoder` / `Rfc5053Decoder` |
-
-[`fountain_scheme`](https://github.com/shhyang/fountain_scheme) 2.1+ supplies the RFC scheme math through `fountain_scheme::rfc::rq` (`RaptorQSysCode`, padding wrappers) and `fountain_scheme::rfc::r10` (`Raptor10SysCode`).
-
-## Publishing (single GitHub repo)
-
-This crate ships with [`fountain_transfer`](../fountain_transfer/) in one workspace:
-
-**https://github.com/shhyang/fountain_transfer**
-
-From the monorepo root:
-
-```bash
-./standalone/sync-from-monorepo.sh publish/fountain_transfer
-```
-
-That copies both crates, installs registry/git deps from [`Cargo.standalone.toml`](Cargo.standalone.toml), and writes the workspace root. Full steps: [standalone/PUBLISH.md](../standalone/PUBLISH.md).
-
-For crates.io (optional), publish **`fountain_transfer_core` first**, then **`fountain_transfer`** from the same repo.
-
-## Related
-
-- [fountain_transfer](../fountain_transfer/) — UDP CLI (`fountain send` / `recv`)
-- [`fountain_scheme::rfc`](https://docs.rs/fountain_scheme/latest/fountain_scheme/rfc/) — RFC scheme layer (`rq` / `r10`)
-- [docs/plans/fountain-transfer.md](../docs/plans/fountain-transfer.md) — roadmap
+The tests cover dual-codec round trips, simulated packet loss, supplied storage managers, and malformed packet rejection.
 
 ## License
 
-MIT. See workspace licensing notes for `fountain_engine` (AGPL-3.0 or commercial).
+MIT. See the repository [LICENSE](https://github.com/shhyang/fountain_transfer/blob/main/LICENSE).

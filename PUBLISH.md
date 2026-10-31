@@ -1,108 +1,76 @@
-# Publishing fountain_transfer (single GitHub repo)
+# Publishing fountain_transfer 2.0.0
 
-One GitHub repository contains **both** `fountain_transfer_core` and `fountain_transfer`.  
-RFC scheme math comes from `fountain_scheme` 2.1+ under `rfc::{rq,r10}`.
+This repository contains two MIT-licensed crates:
 
----
+- `fountain_transfer_core` 2.0.0
+- `fountain_transfer` 2.0.0, including the `fountain` binary
 
-## One-time setup
+The shared open-source dependency stack is also MIT:
 
-### 1. Create the GitHub repo
+- `fountain_engine` 2.1
+- `fountain_utility` 2.1
+- `fountain_operators` 2.0
+- `fountain_scheme` 2.1
 
-Create **`fountain_transfer`** on GitHub (e.g. `https://github.com/shhyang/fountain_transfer`).  
-Do not initialize with a README if you will push a full copy.
+RFC 6330 and RFC 5053 scheme math comes from `fountain_scheme::rfc::{rq,r10}`. No standalone Raptor package dependency is used.
 
-### 2. Clone into the monorepo (optional local mirror)
+## Pre-release checks
 
-```bash
-mkdir -p publish
-git clone https://github.com/shhyang/fountain_transfer.git publish/fountain_transfer
-```
-
-`publish/` is gitignored in the monorepo.
-
----
-
-## Sync from monorepo
-
-From the **monorepo root** (`erasure_coding_lib_office/`):
+From the repository root:
 
 ```bash
-./standalone/sync-from-monorepo.sh publish/fountain_transfer
-```
-
-Or default target `publish/fountain_transfer`:
-
-```bash
-./standalone/sync-from-monorepo.sh
-```
-
-The script:
-
-1. Copies `fountain_transfer_core/` and `fountain_transfer/` sources (no monorepo `Cargo.toml`)
-2. Installs workspace root `standalone/Cargo.toml`
-3. Installs `Cargo.standalone.toml` → each crate's `Cargo.toml`
-4. Copies `standalone/README.md` to the repo root
-
----
-
-## Pre-release checklist
-
-In the publish clone:
-
-```bash
-cd publish/fountain_transfer
-cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p fountain_transfer --release
+cargo publish -p fountain_transfer_core --dry-run --allow-dirty
 ```
 
-Optional crates.io dry-run (publish **core** first):
+`--allow-dirty` is only needed before the release commit exists. Run the checks again from a clean commit before publication.
 
-```bash
-cargo publish -p fountain_transfer_core --dry-run
-cargo publish -p fountain_transfer --dry-run
-```
+The CLI's crates.io dry run becomes possible after `fountain_transfer_core` 2.0.0 has been published. Until then, its path dependency works for local builds and tests.
 
----
+## Version 2 API note
 
-## Push to GitHub
+`CodecConfig::RaptorQ` and `CodecConfig::Raptor10` changed from unit variants to struct variants, and the RFC transmission parameter constructors now accept codec options. Library users must update those call sites. `TransferSpec::new` remains the default constructor and does not change the positional CLI workflow.
 
-```bash
-cd publish/fountain_transfer
-git add .
-git status
-git commit -m "Release fountain_transfer workspace v1.0.0"
-git tag v1.0.0
-git push -u origin main
-git push origin v1.0.0
-```
+## Publish order
 
----
-
-## crates.io (optional, same repo)
-
-From the publish clone root:
+After a final human review:
 
 ```bash
 cargo publish -p fountain_transfer_core
 cargo publish -p fountain_transfer
 ```
 
-Both crates use `repository = "https://github.com/shhyang/fountain_transfer"`.
+Publish `fountain_transfer_core` first and wait for the crates.io index to expose 2.0.0 before publishing the CLI.
 
----
+## GitHub release
 
-## Layout after sync
+The repository-local release sequence is:
 
+```bash
+git tag v2.0.0
+git push origin main
+git push origin v2.0.0
 ```
-fountain_transfer/          # GitHub repo root
-├── Cargo.toml            # workspace
+
+Tags and pushes are intentionally deferred until review. In the GitHub repository settings, set the About description and topics from the root README.
+
+## Final layout
+
+```text
+fountain_transfer/
+├── Cargo.toml
+├── Cargo.lock
+├── LICENSE
 ├── README.md
+├── PUBLISH.md
 ├── fountain_transfer_core/
-│   ├── Cargo.toml        # registry + git deps
-│   └── src/ ...
+│   ├── Cargo.toml
+│   ├── README.md
+│   └── src/
 └── fountain_transfer/
-    ├── Cargo.toml        # path dep on ../fountain_transfer_core
-    └── src/ ...
+    ├── Cargo.toml
+    ├── README.md
+    └── src/
 ```

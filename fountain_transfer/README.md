@@ -1,23 +1,31 @@
 # fountain_transfer
 
-Rateless UDP file transfer CLI built on [`fountain_transfer_core`](../fountain_transfer_core/).
+Rateless UDP file transfer CLI built on [`fountain_transfer_core`](https://github.com/shhyang/fountain_transfer/tree/main/fountain_transfer_core).
 
-Published together in one repo: **https://github.com/shhyang/fountain_transfer** (see [standalone/PUBLISH.md](../standalone/PUBLISH.md)).
+Source and release notes: **https://github.com/shhyang/fountain_transfer**.
 
 **License:** MIT.
 
-## Quick start (two terminals)
+## Install and run
+
+From the repository root:
+
+```bash
+cargo install --path fountain_transfer
+```
+
+Start the receiver first, then run the sender in another terminal:
 
 Terminal 1 — receive (start first):
 
 ```bash
-cargo run -p fountain_transfer --release -- recv received.bin
+fountain recv received.bin
 ```
 
 Terminal 2 — send:
 
 ```bash
-cargo run -p fountain_transfer --release -- send ./myfile.bin 127.0.0.1:7878
+fountain send ./myfile.bin 127.0.0.1:7878
 ```
 
 Verify the transfer:
@@ -28,7 +36,7 @@ cmp ./myfile.bin received.bin && echo "OK: files match"
 
 The receiver listens on `0.0.0.0:7878` by default. Codec and symbol size are sent in a `SessionMeta` frame; the receiver does not need matching flags for a basic transfer.
 
-Long-flag forms still work for scripts: `send file --addr host:port`, `recv -o received.bin`.
+The command line uses positional paths and destinations: `send <path> <host:port>` and `recv <output>`. `cargo install fountain_transfer` will be available when the crates are published to crates.io.
 
 ## Commands
 
@@ -112,15 +120,16 @@ cargo build -p fountain_transfer --release
 
 Use `cargo run -p fountain_transfer --release --` if you prefer not to install the binary.
 
-### Standalone publish clone
+### Dependencies and licensing
 
-From a synced GitHub publish tree:
+From the repository root:
 
 ```bash
-cd publish/fountain_transfer   # after ./standalone/sync-from-monorepo.sh
 cargo test --workspace
 cargo run -p fountain_transfer --release -- recv received.bin
 ```
+
+The library and CLI depend on the MIT-licensed `fountain_engine` 2.1, `fountain_utility` 2.1, `fountain_operators` 2.0, and `fountain_scheme` 2.1 crates. RaptorQ and Raptor10 scheme math is provided by `fountain_scheme::rfc::{rq,r10}`.
 
 ### Expected success output
 
