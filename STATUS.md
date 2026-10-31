@@ -4,13 +4,42 @@ Updated: 2026-10-31
 
 ## Tip
 
-Implementation tip: `31a3d9b` (`feat(cli): improve help, status, and actionable errors`).
+Implementation tip: `b4624a6` (`feat(core/cli): add progress events and harden datagrams`).
+Full SHA: `b4624a64aff5b1b561a2c9bdc7b4886292807007`.
 
 This status file is committed after that implementation tip; use
-`git rev-parse --short HEAD` for the current final commit. Both new commits are
-local on `main` and the final branch is 6 commits ahead of `origin/main`.
+`git rev-parse --short HEAD` for the final documentation commit. The status
+commit brings the local `main` branch to 8 commits ahead of `origin/main`.
 
-## Changed
+## Changed in this pass
+
+- Added public `ProgressEvent` and `ProgressCallback` APIs. Sender events cover
+  session start, every source/repair packet with cumulative and planned bytes,
+  and send completion. Receiver events cover session establishment, accepted
+  packets and bytes, approximate decode percentage, completion, and ignored
+  datagrams.
+- Added `send_*_with_progress` and `receive_*_with_progress` variants while
+  preserving all existing callback-free API signatures and default CLI output.
+- Documented and implemented decode percentage as
+  `min(99, 100 * packets_accepted / ceil(transfer_length_f / symbol_size_t))`;
+  it is exactly `100` only after codec decoding completes.
+- Added `--progress` to both CLI commands. Status is written to stderr and
+  throttled to every 100 packets plus roughly 5% decode bands, with start and
+  finish events always reported.
+- Hardened receive so malformed, undecodable, wrong-version, unknown-codec,
+  wrong-session, invalid-symbol, and unexpected-SBN datagrams are skipped
+  instead of failing the transfer.
+- Packets before metadata remain ignored. With no expected session ID, the
+  receiver now sticks to the first valid session and ignores foreign metadata
+  and packets until completion or timeout.
+- A repeated metadata frame with the active session ID now intentionally resets
+  decoder state and accepted packet/byte counters so a full retransmission can
+  recover.
+- Added loopback coverage for progress events, corrupt-datagram recovery,
+  foreign-session isolation, and same-session retransmission/reset. Added CLI
+  help coverage for both `--progress` flags.
+
+## Previous local changes
 
 - Expanded `fountain --help`, `send --help`, and `recv --help` with argument
   descriptions, defaults, endpoint examples, and the receiver-first workflow.
@@ -39,20 +68,15 @@ local on `main` and the final branch is 6 commits ahead of `origin/main`.
 
 ## Verification
 
-- `cargo test --workspace`: passed.
-- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `RUSTFLAGS='-D warnings' cargo clippy --workspace --no-default-features --all-targets`: passed.
-- `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps`: passed.
-- `cargo build -p fountain_transfer --release`: passed.
-- Release-binary loopback transfer: sender exit `0`, receiver exit `0`, output
-  byte-for-byte identical.
+- `cargo test --workspace`: **passed** (all unit, CLI subprocess, loopback,
+  codec integration, and doc tests).
+- `cargo clippy --workspace --all-targets -- -D warnings`: **passed**.
 
 ## Deliberately Skipped
 
-- No GUI. This pass was limited to CLI help, interaction, and errors.
-- No networking, wire-format, session, or codec redesign.
-- No per-packet percentage UI. Meaningful progress needs a callback or event API
-  from the sender/receiver, which is larger than this low-risk polish pass.
+- Delivery acknowledgement and resume support remain deliberately skipped.
+- No GUI.
+- No wire-format/version bump; `WIRE_VERSION` remains `1`.
 - No legacy `--addr` / `-o` compatibility layer. Keeping a hidden rewrite made
   help and errors inconsistent; the positional migration is documented.
 - No dependency bumps, publishing, push, remote changes, or work outside this
@@ -60,10 +84,5 @@ local on `main` and the final branch is 6 commits ahead of `origin/main`.
 
 ## Remaining Gaps
 
-1. Add opt-in transfer progress events (source/repair packet counts, bytes, and
-   decode progress) so the CLI can show periodic status without tightly coupling
-   the library to terminal output.
-2. Harden multi-sender and malformed-datagram behavior, including clearer
-   same-session reset semantics and recovery from corrupt or stale packets.
-3. Add delivery acknowledgement or resume support; current UDP success means
-   datagrams were accepted locally, not that the receiver completed recovery.
+- Delivery acknowledgement and resume are not implemented. Current UDP success
+  means datagrams were accepted locally, not that the receiver recovered.
