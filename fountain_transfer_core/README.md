@@ -36,6 +36,8 @@ cargo build -p fountain_transfer_core --no-default-features --features raptor-10
 
 Selecting a disabled codec returns `TransferError::CodecNotEnabled`.
 
+With neither codec feature enabled, the crate still builds for API and documentation tooling. Codec constructors return `TransferError::CodecNotEnabled`; no transfer can be encoded or decoded.
+
 ## Quick start
 
 ```rust
@@ -84,7 +86,13 @@ let raptor_10 = CodecConfig::Raptor10 {
 };
 ```
 
-`TransferSpec::new` uses `DEFAULT_DMAX` (30) and the default reversed LDPC precode. Construct a `TransferSpec` literal when custom codec parameters are needed. `LDPCType` is re-exported from `fountain_scheme::rfc::rq`.
+`TransferSpec::new` validates its dimensions, uses `DEFAULT_DMAX` (30), and selects the default reversed LDPC precode. Use `TransferSpec::with_codec` for custom codec parameters; it applies the same validation as the convenience constructor. `LDPCType` is re-exported from `fountain_scheme::rfc::rq`.
+
+```rust
+let spec = TransferSpec::with_codec(object.len(), 1400, raptor_q)?;
+```
+
+`TransferSpec::validate()` is available when constructing a struct literal or accepting a spec from another component.
 
 The CLI intentionally exposes only a codec choice and symbol size; these lower-level settings are library configuration.
 
@@ -109,6 +117,8 @@ Constructors:
 - `TransferDecoderImpl::new_with_storage_manager(spec, manager)` uses the supplied operator.
 
 `recover_object()` returns `TransferError::DecodeNotComplete` until decoding reaches `DecodeStatus::Decoded`.
+
+Errors describe the invalid value and the next action. For example, a disabled codec names the Cargo feature to enable, and an early recovery attempt tells the caller to add more packets. The same messages flow through the UDP helper crate as `NetError::Core`.
 
 ## RFC packet layer
 

@@ -8,6 +8,8 @@
 //! - **`raptor-10`** (default) — RFC 5053 via `fountain_scheme::rfc::r10`; enables [`CodecConfig::Raptor10`].
 //!
 //! Build with only one codec, e.g. `cargo build -p fountain_transfer_core --no-default-features --features raptor-q`.
+//! With neither codec feature enabled, the crate still builds for API/documentation tooling,
+//! but all codec constructors return [`TransferError::CodecNotEnabled`].
 //!
 //! # Main types
 //!
@@ -21,28 +23,33 @@
 //!
 //! Re-exported for integrators: [`DecodeStatus`].
 
+#![cfg_attr(
+    not(any(feature = "raptor-q", feature = "raptor-10")),
+    allow(unreachable_code, unused_variables, unused_mut)
+)]
+
 pub use fountain_engine::types::DecodeStatus;
 
+#[cfg(feature = "raptor-10")]
+mod rfc5053_codec;
+#[cfg(feature = "raptor-10")]
+mod rfc5053_layout;
 #[cfg(feature = "raptor-q")]
 mod rfc6330_codec;
 #[cfg(feature = "raptor-q")]
 pub mod rfc6330_layout;
 #[cfg(feature = "raptor-q")]
 mod rfc6330_mapping;
-#[cfg(feature = "raptor-10")]
-mod rfc5053_codec;
-#[cfg(feature = "raptor-10")]
-mod rfc5053_layout;
 
-#[cfg(feature = "raptor-q")]
-pub use rfc6330_codec::{
-    EncodingPacket as Rfc6330EncodingPacket, PayloadId as Rfc6330PayloadId, Rfc6330Decoder,
-    Rfc6330Encoder, Rfc6330EncoderBuilder, Rfc6330TransmissionParams,
-};
 #[cfg(feature = "raptor-10")]
 pub use rfc5053_codec::{
     EncodingPacket as Rfc5053EncodingPacket, PayloadId as Rfc5053PayloadId, Rfc5053Decoder,
     Rfc5053Encoder, Rfc5053EncoderBuilder, Rfc5053TransmissionParams,
+};
+#[cfg(feature = "raptor-q")]
+pub use rfc6330_codec::{
+    EncodingPacket as Rfc6330EncodingPacket, PayloadId as Rfc6330PayloadId, Rfc6330Decoder,
+    Rfc6330Encoder, Rfc6330EncoderBuilder, Rfc6330TransmissionParams,
 };
 
 #[cfg(feature = "raptor-q")]
@@ -60,69 +67,145 @@ use std::fmt::{Display, Formatter};
 /// Default maximum degree (`dmax`) for RaptorQ and Raptor10 in this facade.
 pub const DEFAULT_DMAX: usize = 30;
 
+/// Codec family used for a transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecKind {
+    /// RaptorQ, as specified by RFC 6330.
     RaptorQ,
+    /// Raptor10, as specified by RFC 5053.
     Raptor10,
 }
 
+impl Display for CodecKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RaptorQ => "RaptorQ",
+            Self::Raptor10 => "Raptor10",
+        })
+    }
+}
+
+/// Codec-neutral RFC payload sent over a transport.
+///
+/// `sbn` and `esi` are payload identifiers, not the codec engine's internal coded IDs.
 #[derive(Debug, Clone)]
 pub struct TransferPacket {
+    /// Source block number. The transfer facade currently supports only block `0`.
     pub sbn: u32,
+    /// Encoding symbol identifier within the source block.
     pub esi: usize,
+    /// Encoded symbol bytes.
     pub symbol: Vec<u8>,
 }
 
+/// Codec-specific configuration for a transfer.
 #[derive(Debug, Clone)]
 pub enum CodecConfig {
+    /// RFC 6330 configuration.
     #[cfg(feature = "raptor-q")]
     RaptorQ {
+        /// Maximum degree used by the scheme configuration.
         dmax: usize,
+        /// LDPC precode type.
         ldpc_type: LDPCType,
     },
+    /// RFC 5053 configuration.
     #[cfg(feature = "raptor-10")]
-    Raptor10 { dmax: usize },
+    Raptor10 {
+        /// Maximum degree used by the scheme configuration.
+        dmax: usize,
+    },
+    /// Placeholder used when no codec feature is enabled.
+    ///
+    /// `Infallible` makes this variant impossible to construct.
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[doc(hidden)]
+    NoCodec(std::convert::Infallible),
 }
 
+/// Description of the object and codec needed by both encoder and decoder.
 #[derive(Debug, Clone)]
 pub struct TransferSpec {
+    /// Original, unpadded object length in bytes.
     pub transfer_length_f: usize,
+    /// Number of bytes in each encoded symbol.
     pub symbol_size_t: usize,
+    /// Codec and codec-specific settings.
     pub codec: CodecConfig,
 }
 
 impl TransferSpec {
-    /// Build a spec from object size, symbol size, and codec kind (uses [`DEFAULT_DMAX`] and default RaptorQ LDPC).
+    /// Build a validated spec using [`DEFAULT_DMAX`] and the default RaptorQ LDPC.
+    ///
+    /// Returns [`TransferError::InvalidTransferLength`] or
+    /// [`TransferError::InvalidSymbolSize`] for zero-sized dimensions, and
+    /// [`TransferError::CodecNotEnabled`] when the selected feature is disabled.
     pub fn new(
         transfer_length_f: usize,
         symbol_size_t: usize,
         kind: CodecKind,
     ) -> Result<Self, TransferError> {
-        Ok(Self {
+        validate_dimensions(transfer_length_f, symbol_size_t)?;
+        Self::with_codec(
             transfer_length_f,
             symbol_size_t,
-            codec: codec_config_from_kind(kind)?,
-        })
+            codec_config_from_kind(kind)?,
+        )
     }
 
+    /// Build a validated spec with custom codec settings.
+    ///
+    /// This is the preferred constructor when overriding `dmax` or RaptorQ's
+    /// LDPC precode. [`TransferSpec::validate`] performs the same checks for a
+    /// struct literal.
+    pub fn with_codec(
+        transfer_length_f: usize,
+        symbol_size_t: usize,
+        codec: CodecConfig,
+    ) -> Result<Self, TransferError> {
+        let spec = Self {
+            transfer_length_f,
+            symbol_size_t,
+            codec,
+        };
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    /// Validate dimensions and confirm that the configured codec is enabled.
+    pub fn validate(&self) -> Result<(), TransferError> {
+        validate_spec(self)
+    }
+
+    /// Return the codec family selected by this spec.
     pub fn codec_kind(&self) -> CodecKind {
         match &self.codec {
             #[cfg(feature = "raptor-q")]
             CodecConfig::RaptorQ { .. } => CodecKind::RaptorQ,
             #[cfg(feature = "raptor-10")]
             CodecConfig::Raptor10 { .. } => CodecKind::Raptor10,
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            CodecConfig::NoCodec(never) => match *never {},
         }
     }
 }
 
+/// Errors returned while validating transfer parameters or decoding packets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransferError {
+    /// The object bytes do not match the length declared in the spec.
     InvalidObjectLength { expected: usize, actual: usize },
+    /// The configured symbol size is zero.
     InvalidSymbolSize,
+    /// The configured object length is zero.
     InvalidTransferLength,
+    /// A packet used a source block other than the currently supported block zero.
     UnsupportedSourceBlock(u32),
+    /// A packet's symbol length does not match the negotiated symbol size.
     SymbolLengthMismatch { expected: usize, actual: usize },
+    /// Recovery was requested before decoding reached [`DecodeStatus::Decoded`].
     DecodeNotComplete,
+    /// The requested codec was not compiled into the crate.
     CodecNotEnabled(CodecKind),
 }
 
@@ -130,20 +213,38 @@ impl Display for TransferError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidObjectLength { expected, actual } => {
-                write!(f, "object length mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "input object is {actual} bytes but the transfer spec expects {expected} bytes"
+                )
             }
-            Self::InvalidSymbolSize => write!(f, "symbol_size_t must be > 0"),
-            Self::InvalidTransferLength => write!(f, "transfer_length_f must be > 0"),
+            Self::InvalidSymbolSize => {
+                write!(f, "symbol size must be greater than zero")
+            }
+            Self::InvalidTransferLength => {
+                write!(f, "input object must not be empty")
+            }
             Self::UnsupportedSourceBlock(sbn) => {
-                write!(f, "only sbn=0 is currently supported, got {sbn}")
+                write!(
+                    f,
+                    "received packet for source block {sbn}, but only source block 0 is supported"
+                )
             }
             Self::SymbolLengthMismatch { expected, actual } => {
-                write!(f, "symbol length mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "received a {actual}-byte symbol, but the transfer expects {expected} bytes"
+                )
             }
-            Self::DecodeNotComplete => write!(f, "decode is not complete yet"),
+            Self::DecodeNotComplete => {
+                write!(
+                    f,
+                    "cannot recover the object until decoding completes; add more packets"
+                )
+            }
             Self::CodecNotEnabled(kind) => write!(
                 f,
-                "codec {kind:?} not enabled; rebuild fountain_transfer_core with feature {}",
+                "{kind} codec support is disabled; rebuild with the `{}` feature",
                 codec_feature_name(*kind)
             ),
         }
@@ -159,34 +260,44 @@ fn codec_feature_name(kind: CodecKind) -> &'static str {
     }
 }
 
+/// Produces source and repair packets from an object.
 pub trait TransferEncoder {
+    /// Return all source packets for the object.
     fn source_packets(&mut self) -> Vec<TransferPacket>;
-    fn repair_packets(
-        &mut self,
-        start_repair_index: usize,
-        count: usize,
-    ) -> Vec<TransferPacket>;
+    /// Return `count` repair packets beginning at `start_repair_index`.
+    fn repair_packets(&mut self, start_repair_index: usize, count: usize) -> Vec<TransferPacket>;
 }
 
+/// Consumes packets and recovers the original object.
 pub trait TransferDecoder {
+    /// Add one received symbol and return the resulting decode status.
     fn add_packet(&mut self, packet: &TransferPacket) -> Result<DecodeStatus, TransferError>;
+    /// Return the current decode state without changing the decoder.
     fn decode_status(&self) -> DecodeStatus;
+    /// Recover the original object once decoding is complete.
     fn recover_object(&self) -> Result<Vec<u8>, TransferError>;
 }
 
+/// Supplies codec operators and optionally stores packets for a decoder.
 pub trait StorageManager {
+    /// Symbol size expected by the supplied operators.
     fn symbol_size(&self) -> usize;
+    /// Create a fresh data operator for an encoder or decoder.
     fn new_operator(&self) -> Box<dyn DataOperator>;
+    /// Store a packet and return a handle for [`StorageManager::packet`].
     fn store_packet(&mut self, packet: TransferPacket) -> usize;
+    /// Retrieve a previously stored packet.
     fn packet(&self, handle: usize) -> Option<&TransferPacket>;
 }
 
+/// In-memory [`StorageManager`] backed by a growable vector.
 pub struct SlabStorageManager {
     symbol_size_t: usize,
     packets: Vec<TransferPacket>,
 }
 
 impl SlabStorageManager {
+    /// Create an empty packet store for symbols of `symbol_size_t` bytes.
     #[must_use]
     pub fn new(symbol_size_t: usize) -> Self {
         Self {
@@ -215,14 +326,22 @@ impl StorageManager for SlabStorageManager {
     }
 }
 
+/// Codec-dispatched encoder returned by [`TransferEncoderImpl::new`].
 pub enum TransferEncoderImpl {
     #[cfg(feature = "raptor-q")]
     RaptorQ(Rfc6330Encoder, TransferSpec),
     #[cfg(feature = "raptor-10")]
     Raptor10(Rfc5053Encoder, TransferSpec),
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[doc(hidden)]
+    NoCodec(std::convert::Infallible),
 }
 
 impl TransferEncoderImpl {
+    /// Create an encoder from a validated spec and matching object bytes.
+    ///
+    /// Use [`TransferSpec::validate`] or [`TransferSpec::new`] at configuration
+    /// boundaries so parameter errors are reported before encoding starts.
     pub fn new(spec: TransferSpec, object: &[u8]) -> Result<Self, TransferError> {
         validate_spec(&spec)?;
         if object.len() != spec.transfer_length_f {
@@ -257,10 +376,15 @@ impl TransferEncoderImpl {
                     spec.clone(),
                 )
             }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(encoder)
     }
 
+    /// Create an encoder using operators supplied by `manager`.
+    ///
+    /// The manager's symbol size must match the spec.
     pub fn new_with_storage_manager(
         spec: TransferSpec,
         object: &[u8],
@@ -305,6 +429,8 @@ impl TransferEncoderImpl {
                     spec.clone(),
                 )
             }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(encoder)
     }
@@ -333,14 +459,12 @@ impl TransferEncoder for TransferEncoderImpl {
                     symbol: pkt.symbol,
                 })
                 .collect(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         }
     }
 
-    fn repair_packets(
-        &mut self,
-        start_repair_index: usize,
-        count: usize,
-    ) -> Vec<TransferPacket> {
+    fn repair_packets(&mut self, start_repair_index: usize, count: usize) -> Vec<TransferPacket> {
         match self {
             #[cfg(feature = "raptor-q")]
             Self::RaptorQ(enc, _) => enc
@@ -362,18 +486,25 @@ impl TransferEncoder for TransferEncoderImpl {
                     symbol: pkt.symbol,
                 })
                 .collect(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         }
     }
 }
 
+/// Codec-dispatched decoder returned by [`TransferDecoderImpl::new`].
 pub enum TransferDecoderImpl {
     #[cfg(feature = "raptor-q")]
     RaptorQ(Rfc6330Decoder, TransferSpec),
     #[cfg(feature = "raptor-10")]
     Raptor10(Rfc5053Decoder, TransferSpec),
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    #[doc(hidden)]
+    NoCodec(std::convert::Infallible),
 }
 
 impl TransferDecoderImpl {
+    /// Create a decoder from a validated spec.
     pub fn new(spec: TransferSpec) -> Result<Self, TransferError> {
         validate_spec(&spec)?;
         let decoder = match &spec.codec {
@@ -396,10 +527,15 @@ impl TransferDecoderImpl {
                 );
                 Self::Raptor10(Rfc5053Decoder::new_with_default_operator(params), spec)
             }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(decoder)
     }
 
+    /// Create a decoder using an operator supplied by `manager`.
+    ///
+    /// The manager's symbol size must match the spec.
     pub fn new_with_storage_manager(
         spec: TransferSpec,
         manager: &dyn StorageManager,
@@ -437,6 +573,8 @@ impl TransferDecoderImpl {
                     spec,
                 )
             }
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            CodecConfig::NoCodec(never) => match *never {},
         };
         Ok(decoder)
     }
@@ -452,6 +590,8 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(_, spec) => spec.symbol_size_t,
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(_, spec) => spec.symbol_size_t,
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         };
         if packet.symbol.len() != symbol_size {
             return Err(TransferError::SymbolLengthMismatch {
@@ -476,6 +616,8 @@ impl TransferDecoder for TransferDecoderImpl {
                 },
                 symbol: packet.symbol.clone(),
             }),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         };
         Ok(status)
     }
@@ -486,6 +628,8 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(dec, _) => dec.decode_status(),
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(dec, _) => dec.decode_status(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         }
     }
 
@@ -498,19 +642,29 @@ impl TransferDecoder for TransferDecoderImpl {
             Self::RaptorQ(dec, _) => dec.recover_object(),
             #[cfg(feature = "raptor-10")]
             Self::Raptor10(dec, _) => dec.recover_object(),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+            Self::NoCodec(never) => match *never {},
         };
         Ok(object)
     }
 }
 
 fn validate_spec(spec: &TransferSpec) -> Result<(), TransferError> {
-    if spec.transfer_length_f == 0 {
+    validate_dimensions(spec.transfer_length_f, spec.symbol_size_t)?;
+    ensure_codec_enabled(spec.codec_kind())
+}
+
+fn validate_dimensions(
+    transfer_length_f: usize,
+    symbol_size_t: usize,
+) -> Result<(), TransferError> {
+    if transfer_length_f == 0 {
         return Err(TransferError::InvalidTransferLength);
     }
-    if spec.symbol_size_t == 0 {
+    if symbol_size_t == 0 {
         return Err(TransferError::InvalidSymbolSize);
     }
-    ensure_codec_enabled(spec.codec_kind())
+    Ok(())
 }
 
 /// Build [`CodecConfig`] for a [`CodecKind`] when the corresponding crate feature is enabled.
@@ -575,6 +729,7 @@ fn ensure_codec_enabled(kind: CodecKind) -> Result<(), TransferError> {
 mod tests {
     use super::*;
 
+    #[cfg(any(feature = "raptor-q", feature = "raptor-10"))]
     fn sample_object(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i % 251) as u8).collect()
     }
@@ -590,14 +745,11 @@ mod tests {
         for spec in specs {
             let object = sample_object(spec.transfer_length_f);
             let mut storage = SlabStorageManager::new(spec.symbol_size_t);
-            let mut enc = TransferEncoderImpl::new_with_storage_manager(
-                spec.clone(),
-                &object,
-                &storage,
-            )
-            .expect("encoder");
-            let mut dec =
-                TransferDecoderImpl::new_with_storage_manager(spec.clone(), &storage).expect("decoder");
+            let mut enc =
+                TransferEncoderImpl::new_with_storage_manager(spec.clone(), &object, &storage)
+                    .expect("encoder");
+            let mut dec = TransferDecoderImpl::new_with_storage_manager(spec.clone(), &storage)
+                .expect("decoder");
 
             let source = enc.source_packets();
             for packet in source.iter().skip(1) {
@@ -669,6 +821,61 @@ mod tests {
             dec.recover_object().expect_err("not decoded yet"),
             TransferError::DecodeNotComplete
         );
+    }
+
+    #[test]
+    fn spec_creation_rejects_zero_dimensions() {
+        assert_eq!(
+            TransferSpec::new(0, 10, CodecKind::RaptorQ).expect_err("empty object"),
+            TransferError::InvalidTransferLength
+        );
+        assert_eq!(
+            TransferSpec::new(10, 0, CodecKind::RaptorQ).expect_err("zero symbol size"),
+            TransferError::InvalidSymbolSize
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "raptor-q")]
+    fn custom_codec_spec_is_validated_by_constructor() {
+        let spec = TransferSpec::with_codec(
+            10,
+            2,
+            CodecConfig::RaptorQ {
+                dmax: DEFAULT_DMAX,
+                ldpc_type: LDPCType::ReversedLDPC,
+            },
+        )
+        .expect("valid custom codec spec");
+        assert_eq!(spec.transfer_length_f, 10);
+        assert_eq!(spec.codec_kind(), CodecKind::RaptorQ);
+    }
+
+    #[test]
+    fn errors_explain_the_recovery_action() {
+        assert_eq!(
+            TransferError::DecodeNotComplete.to_string(),
+            "cannot recover the object until decoding completes; add more packets"
+        );
+        assert_eq!(
+            TransferError::SymbolLengthMismatch {
+                expected: 1400,
+                actual: 1200
+            }
+            .to_string(),
+            "received a 1200-byte symbol, but the transfer expects 1400 bytes"
+        );
+    }
+
+    #[test]
+    #[cfg(not(any(feature = "raptor-q", feature = "raptor-10")))]
+    fn disabled_codecs_return_an_actionable_error() {
+        for kind in [CodecKind::RaptorQ, CodecKind::Raptor10] {
+            assert_eq!(
+                TransferSpec::new(10, 2, kind).expect_err("no codec feature"),
+                TransferError::CodecNotEnabled(kind)
+            );
+        }
     }
 
     #[test]
