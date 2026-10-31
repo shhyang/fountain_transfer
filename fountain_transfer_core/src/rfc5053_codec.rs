@@ -170,8 +170,23 @@ impl Rfc5053Decoder {
         packet: &EncodingPacket,
     ) -> fountain_engine::types::DecodeStatus {
         assert_eq!(packet.payload_id.sbn, 0, "only sbn=0 supported in v1");
-        self.decoder
-            .add_coded_vector(packet.payload_id.esi, &packet.symbol)
+        let esi = packet.payload_id.esi;
+        // Systematic: single-copy via add_coded_vector; zero-copy via mark_* when resident.
+        self.decoder.add_coded_vector(esi, &packet.symbol)
+    }
+
+    /// See [`BhpDecoder::mark_systematic_resident`](crate::bhp_codec::BhpDecoder::mark_systematic_resident).
+    pub fn mark_systematic_resident(
+        &mut self,
+        esi: usize,
+    ) -> fountain_engine::types::DecodeStatus {
+        assert!(esi < self.params.k, "esi {esi} out of range for K={}", self.params.k);
+        self.decoder.mark_systematic_resident(esi)
+    }
+
+    /// See [`BhpDecoder::mark_all_systematic_resident`](crate::bhp_codec::BhpDecoder::mark_all_systematic_resident).
+    pub fn mark_all_systematic_resident(&mut self) -> fountain_engine::types::DecodeStatus {
+        self.decoder.mark_all_systematic_resident()
     }
 
     pub fn decode_status(&self) -> fountain_engine::types::DecodeStatus {

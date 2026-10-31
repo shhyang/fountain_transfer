@@ -225,12 +225,33 @@ impl Rfc6330Decoder {
 
     pub fn add_packet(&mut self, packet: &EncodingPacket) -> fountain_engine::types::DecodeStatus {
         assert_eq!(packet.payload_id.sbn, 0, "only sbn=0 supported in v1");
-        let coded_id = rfc6330_mapping::payload_esi_to_coded_id(
-            packet.payload_id.esi,
-            self.params.k,
-            self.num_total,
-        );
-        self.decoder.add_coded_vector(coded_id, &packet.symbol)
+        let esi = packet.payload_id.esi;
+        if esi < self.params.k {
+            // Wire ESI < K → coded_id == esi (systematic message slot; single-copy).
+            // Zero-copy when already resident: [`Self::mark_systematic_resident`].
+            self.decoder.add_coded_vector(esi, &packet.symbol)
+        } else {
+            let coded_id = rfc6330_mapping::payload_esi_to_coded_id(
+                esi,
+                self.params.k,
+                self.num_total,
+            );
+            self.decoder.add_coded_vector(coded_id, &packet.symbol)
+        }
+    }
+
+    /// Mark systematic wire ESI already resident in the padded decoder message slot.
+    pub fn mark_systematic_resident(
+        &mut self,
+        esi: usize,
+    ) -> fountain_engine::types::DecodeStatus {
+        assert!(esi < self.params.k, "esi {esi} out of range for K={}", self.params.k);
+        self.decoder.mark_systematic_resident(esi)
+    }
+
+    /// Mark all K systematic slots resident (zero-copy all-K when payloads are in place).
+    pub fn mark_all_systematic_resident(&mut self) -> fountain_engine::types::DecodeStatus {
+        self.decoder.mark_all_systematic_resident()
     }
 
     pub fn decode_status(&self) -> fountain_engine::types::DecodeStatus {

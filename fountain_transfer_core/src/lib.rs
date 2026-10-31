@@ -291,7 +291,18 @@ pub trait TransferEncoder {
 /// Consumes packets and recovers the original object.
 pub trait TransferDecoder {
     /// Add one received symbol and return the resulting decode status.
+    ///
+    /// Systematic ESIs (`esi < K`) use the engine single-copy message-slot path.
+    /// When the attached operator already holds the payload at `data_id == esi`, call
+    /// [`Self::mark_systematic_resident`] (or [`Self::mark_all_systematic_resident`])
+    /// for the zero-copy / all-K fast path instead of [`Self::add_packet`].
     fn add_packet(&mut self, packet: &TransferPacket) -> Result<DecodeStatus, TransferError>;
+    /// Mark systematic message slot `esi` already resident in the decoder operator.
+    ///
+    /// No payload copy. See engine [`Decoder::mark_systematic_resident`].
+    fn mark_systematic_resident(&mut self, esi: usize) -> Result<DecodeStatus, TransferError>;
+    /// Mark every systematic slot `0..K` resident (zero-copy all-K when payloads are in place).
+    fn mark_all_systematic_resident(&mut self) -> Result<DecodeStatus, TransferError>;
     /// Return the current decode state without changing the decoder.
     fn decode_status(&self) -> DecodeStatus;
     /// Recover the original object once decoding is complete.
@@ -711,6 +722,34 @@ impl TransferDecoder for TransferDecoderImpl {
                 },
                 symbol: packet.symbol.clone(),
             }),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
+            Self::NoCodec(never) => match *never {},
+        };
+        Ok(status)
+    }
+
+    fn mark_systematic_resident(&mut self, esi: usize) -> Result<DecodeStatus, TransferError> {
+        let status = match self {
+            #[cfg(feature = "raptor-q")]
+            Self::RaptorQ(dec, _) => dec.mark_systematic_resident(esi),
+            #[cfg(feature = "raptor-10")]
+            Self::Raptor10(dec, _) => dec.mark_systematic_resident(esi),
+            #[cfg(feature = "bhp")]
+            Self::Bhp(dec, _) => dec.mark_systematic_resident(esi),
+            #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
+            Self::NoCodec(never) => match *never {},
+        };
+        Ok(status)
+    }
+
+    fn mark_all_systematic_resident(&mut self) -> Result<DecodeStatus, TransferError> {
+        let status = match self {
+            #[cfg(feature = "raptor-q")]
+            Self::RaptorQ(dec, _) => dec.mark_all_systematic_resident(),
+            #[cfg(feature = "raptor-10")]
+            Self::Raptor10(dec, _) => dec.mark_all_systematic_resident(),
+            #[cfg(feature = "bhp")]
+            Self::Bhp(dec, _) => dec.mark_all_systematic_resident(),
             #[cfg(not(any(feature = "raptor-q", feature = "raptor-10", feature = "bhp")))]
             Self::NoCodec(never) => match *never {},
         };

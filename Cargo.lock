@@ -159,18 +159,14 @@ dependencies = [
 
 [[package]]
 name = "fountain_engine"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b21ca28960a99de22b41497324d140c7b3163065a73385ee5de776725dc5b90"
+version = "1.0.0"
 dependencies = [
  "smallvec",
 ]
 
 [[package]]
 name = "fountain_operators"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d3d5f6f66c67314b9c883c24dc6be862f373fb75466de5f5d544e10ff945470"
+version = "1.0.0"
 dependencies = [
  "fountain_engine",
  "rand",
@@ -180,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "fountain_scheme"
-version = "2.2.0"
+version = "1.0.0"
 dependencies = [
  "fountain_engine",
  "fountain_utility",
@@ -211,9 +207,7 @@ dependencies = [
 
 [[package]]
 name = "fountain_utility"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afe34802eb09177e53e5dea17d9ffc2f7acad44a34b13e5f865c40b0071ada67"
+version = "1.0.0"
 dependencies = [
  "fountain_engine",
  "rand",

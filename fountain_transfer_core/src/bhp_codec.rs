@@ -165,8 +165,29 @@ impl BhpDecoder {
         packet: &EncodingPacket,
     ) -> fountain_engine::types::DecodeStatus {
         assert_eq!(packet.payload_id.sbn, 0, "only sbn=0 supported in v1");
-        self.decoder
-            .add_coded_vector(packet.payload_id.esi, &packet.symbol)
+        let esi = packet.payload_id.esi;
+        // Systematic ESI: Decoder::add_coded_vector uses insert_systematic_message
+        // (single copy into message slot). When the operator already holds the payload
+        // at `data_id == esi`, call [`Self::mark_systematic_resident`] instead (zero-copy).
+        self.decoder.add_coded_vector(esi, &packet.symbol)
+    }
+
+    /// Mark message slot `esi` as already resident in the decoder operator (`data_id == esi`).
+    ///
+    /// No payload copy. Use after the caller (or a shared [`DataOperator`]) wrote the
+    /// systematic symbol into that slot — all-K via [`Self::mark_all_systematic_resident`]
+    /// hits the near-zero SysDec path.
+    pub fn mark_systematic_resident(
+        &mut self,
+        esi: usize,
+    ) -> fountain_engine::types::DecodeStatus {
+        assert!(esi < self.params.k, "esi {esi} out of range for K={}", self.params.k);
+        self.decoder.mark_systematic_resident(esi)
+    }
+
+    /// Mark every systematic slot `0..K` resident (zero-copy all-K when payloads are in place).
+    pub fn mark_all_systematic_resident(&mut self) -> fountain_engine::types::DecodeStatus {
+        self.decoder.mark_all_systematic_resident()
     }
 
     pub fn decode_status(&self) -> fountain_engine::types::DecodeStatus {
