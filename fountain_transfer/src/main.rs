@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use fountain_transfer::{
-    NetError, RecvConfig, SendConfig, SessionParams, codec_kind_from_cli, random_session_id,
-    receive_object, send_object,
+    IgnoredDatagramReason, NetError, ProgressEvent, RecvConfig, SendConfig, SessionParams,
+    codec_kind_from_cli, random_session_id, receive_object, receive_object_with_progress,
+    send_object, send_object_with_progress,
 };
 use fountain_transfer_core::TransferError;
 
@@ -72,6 +73,10 @@ enum Commands {
         /// Delay after each datagram, in milliseconds.
         #[arg(long, default_value_t = 0, value_name = "MILLISECONDS")]
         delay_ms: u64,
+
+        /// Print periodic packet, byte, and decode progress to stderr.
+        #[arg(long)]
+        progress: bool,
     },
 
     /// Listen for symbols and write the recovered file.
@@ -96,6 +101,10 @@ enum Commands {
             value_parser = clap::value_parser!(u64).range(1..)
         )]
         timeout_secs: u64,
+
+        /// Print periodic packet, byte, and decode progress to stderr.
+        #[arg(long)]
+        progress: bool,
     },
 }
 
@@ -166,6 +175,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             repair_rounds,
             session_id,
             delay_ms,
+            progress,
         } => {
             let codec_kind = codec_kind_from_cli(&codec).map_err(CliError::InvalidCodec)?;
             let dest = resolve_addr(&addr)?;
@@ -186,22 +196,31 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 inter_packet_delay: Duration::from_millis(delay_ms),
             };
 
-            eprintln!(
-                "sending {} bytes from {} to {dest} (session {session_id}, codec {codec}, \
-                 symbol size {symbol_size} B)",
-                object.len(),
-                path.display()
-            );
-            send_object(&object, dest, &session, &config)
-                .await
-                .map_err(|source| CliError::Send { dest, source })?;
-            eprintln!("finished sending {} bytes to {dest}", object.len());
+            if progress {
+                let mut printer = ProgressPrinter::default();
+                let mut on_progress = |event| printer.emit(event);
+                send_object_with_progress(&object, dest, &session, &config, &mut on_progress)
+                    .await
+                    .map_err(|source| CliError::Send { dest, source })?;
+            } else {
+                eprintln!(
+                    "sending {} bytes from {} to {dest} (session {session_id}, codec {codec}, \
+                     symbol size {symbol_size} B)",
+                    object.len(),
+                    path.display()
+                );
+                send_object(&object, dest, &session, &config)
+                    .await
+                    .map_err(|source| CliError::Send { dest, source })?;
+                eprintln!("finished sending {} bytes to {dest}", object.len());
+            }
         }
         Commands::Recv {
             output,
             listen,
             session_id,
             timeout_secs,
+            progress,
         } => {
             let wait = Duration::from_secs(timeout_secs);
             eprintln!(
@@ -212,9 +231,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 recv_timeout: wait,
                 expected_session_id: session_id,
             };
-            let outcome = receive_object(&listen, &config)
-                .await
-                .map_err(|error| map_receive_error(error, listen))?;
+            let outcome = if progress {
+                let mut printer = ProgressPrinter::default();
+                let mut on_progress = |event| printer.emit(event);
+                receive_object_with_progress(&listen, &config, &mut on_progress).await
+            } else {
+                receive_object(&listen, &config).await
+            }
+            .map_err(|error| map_receive_error(error, listen))?;
             write_output(&output, &outcome.object)?;
             eprintln!(
                 "received {} bytes on {} from {} ({} packets)",
@@ -226,6 +250,119 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct ProgressPrinter {
+    last_decode_bucket: Option<u8>,
+}
+
+impl ProgressPrinter {
+    fn emit(&mut self, event: ProgressEvent) {
+        match event {
+            ProgressEvent::SenderStarted {
+                session_id,
+                transfer_length_f,
+                symbol_size_t,
+                source_packets,
+                repair_packets,
+                planned_bytes,
+            } => eprintln!(
+                "progress: sending session {session_id}: {transfer_length_f} B, \
+                 {symbol_size_t} B symbols, {source_packets} source + {repair_packets} repair \
+                 packets, {planned_bytes} B planned"
+            ),
+            ProgressEvent::SenderSourcePacketSent {
+                sent,
+                total,
+                bytes_sent,
+                planned_bytes,
+            } if sent == total || sent % 100 == 0 => {
+                eprintln!(
+                    "progress: source packets {sent}/{total}, {bytes_sent}/{planned_bytes} B"
+                );
+            }
+            ProgressEvent::SenderRepairPacketSent {
+                sent,
+                total,
+                bytes_sent,
+                planned_bytes,
+            } if sent == total || sent % 100 == 0 => {
+                eprintln!(
+                    "progress: repair packets {sent}/{total}, {bytes_sent}/{planned_bytes} B"
+                );
+            }
+            ProgressEvent::SenderFinished {
+                source_packets,
+                repair_packets,
+                bytes_sent,
+                planned_bytes,
+            } => eprintln!(
+                "progress: send complete: {source_packets} source + {repair_packets} repair \
+                 packets, {bytes_sent}/{planned_bytes} B"
+            ),
+            ProgressEvent::ReceiverSessionEstablished {
+                session_id,
+                transfer_length_f,
+                symbol_size_t,
+                expected_source_symbols,
+            } => {
+                self.last_decode_bucket = None;
+                eprintln!(
+                    "progress: session {session_id} established: {transfer_length_f} B, \
+                     {symbol_size_t} B symbols, ~{expected_source_symbols} source symbols"
+                );
+            }
+            ProgressEvent::ReceiverPacketAccepted {
+                packets_accepted,
+                bytes_accepted,
+                expected_source_symbols,
+                decode_percent,
+            } => {
+                let bucket = decode_percent / 5;
+                let percent_due = bucket > self.last_decode_bucket.unwrap_or(0)
+                    && decode_percent > 0
+                    && decode_percent < 100;
+                let packet_due = packets_accepted % 100 == 0;
+                if percent_due || packet_due {
+                    eprintln!(
+                        "progress: receive {decode_percent}% ({packets_accepted} packets, \
+                         {bytes_accepted} B accepted; ~{expected_source_symbols} source symbols)"
+                    );
+                }
+                self.last_decode_bucket = Some(bucket);
+            }
+            ProgressEvent::ReceiverDecodeComplete {
+                packets_accepted,
+                bytes_accepted,
+                ..
+            } => eprintln!(
+                "progress: decode complete: {packets_accepted} packets, {bytes_accepted} B accepted"
+            ),
+            ProgressEvent::ReceiverDatagramIgnored {
+                ignored_datagrams,
+                reason,
+            } if ignored_datagrams == 1 || ignored_datagrams % 100 == 0 => eprintln!(
+                "progress: ignored {ignored_datagrams} datagram(s) ({})",
+                ignored_reason_label(reason)
+            ),
+            ProgressEvent::SenderSourcePacketSent { .. }
+            | ProgressEvent::SenderRepairPacketSent { .. }
+            | ProgressEvent::ReceiverDatagramIgnored { .. } => {}
+        }
+    }
+}
+
+fn ignored_reason_label(reason: IgnoredDatagramReason) -> &'static str {
+    match reason {
+        IgnoredDatagramReason::Malformed => "malformed",
+        IgnoredDatagramReason::UnsupportedVersion => "unsupported wire version",
+        IgnoredDatagramReason::UnknownCodec => "unknown codec",
+        IgnoredDatagramReason::InvalidSessionMetadata => "invalid session metadata",
+        IgnoredDatagramReason::BeforeSession => "packet before session metadata",
+        IgnoredDatagramReason::ForeignSession => "foreign session",
+        IgnoredDatagramReason::InvalidPacket => "invalid packet",
+    }
 }
 
 fn map_receive_error(error: NetError, listen: String) -> CliError {
@@ -273,6 +410,7 @@ mod tests {
             repair_count,
             repair_rounds,
             delay_ms,
+            progress,
             ..
         } = cli.command
         else {
@@ -284,6 +422,7 @@ mod tests {
         assert_eq!(repair_count, 256);
         assert_eq!(repair_rounds, 1);
         assert_eq!(delay_ms, 0);
+        assert!(!progress);
     }
 
     #[test]

@@ -66,6 +66,28 @@ fn send_help_documents_positionals_defaults_and_controls() {
     assert!(stdout.contains("[default: 1400]"));
     assert!(stdout.contains("Use 0 to send source symbols only"));
     assert!(stdout.contains("--delay-ms"));
+    assert!(stdout.contains("--progress"));
+    assert!(stdout.contains("packet, byte, and decode progress"));
+}
+
+#[test]
+fn recv_help_documents_progress() {
+    let output = run(&["recv", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--progress"));
+    assert!(stdout.contains("packet, byte, and decode progress"));
+}
+
+#[test]
+fn progress_flag_parses_for_send_and_recv() {
+    let send = run(&["send", "unused.bin", "127.0.0.1:7878", "--progress"]);
+    assert_eq!(send.status.code(), Some(1));
+    assert!(stderr(&send).contains("cannot read input file"));
+
+    let recv = run(&["recv", "unused.bin", "--progress", "--timeout-secs", "0"]);
+    assert_eq!(recv.status.code(), Some(2));
+    assert!(stderr(&recv).contains("--timeout-secs"));
 }
 
 #[test]

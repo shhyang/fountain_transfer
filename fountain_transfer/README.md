@@ -59,6 +59,7 @@ The legacy `--addr` and `-o` forms are no longer rewritten into positionals. Use
 | `--session-id` | random (send) | Fixed ID when filtering multiple sessions |
 | `--timeout-secs` | `60` | Recv idle timeout; must be at least 1 |
 | `--delay-ms` | `0` | Inter-packet delay on send |
+| `--progress` | off | Print periodic packet, byte, and decode progress to stderr |
 
 ## Status and exit codes
 
@@ -67,6 +68,31 @@ Both commands write progress to stderr, leaving stdout available for scripting. 
 CLI errors identify the failing input, destination, or output path. Receive timeouts suggest checking startup order, ports, session IDs, and `--timeout-secs`.
 
 UDP does not acknowledge delivery. `finished sending` means the local socket accepted every datagram; confirm recovery by checking the receiver's completion line and the output file.
+
+### Opt-in progress
+
+Add `--progress` to `send` or `recv` for periodic stderr status. Sender output
+includes source and repair packet counts plus UDP payload bytes. Receiver output
+includes accepted encoded symbols and an estimated decode percentage. Packet
+lines are sampled every 100 packets, decode percentage is sampled in roughly
+5% bands, and start/finish events are always shown.
+
+Receiver decode percentage is approximate:
+`min(99, 100 * packets_accepted / ceil(transfer_length_f / symbol_size_t))`.
+It reaches `100` only after the codec reports successful decoding. Duplicates
+and repair packets can therefore advance the estimate before recovery is ready.
+
+Library callers can use the `send_*_with_progress` and
+`receive_*_with_progress` variants with a
+`&mut fountain_transfer::ProgressCallback`; existing APIs remain callback-free.
+
+### Datagram and session handling
+
+Malformed, stale, and foreign datagrams are ignored while the receiver remains
+active. With no `--session-id`, the receiver sticks to the first valid session
+until it completes or times out instead of switching senders mid-transfer. A
+new `SessionMeta` with the same session id intentionally resets the decoder and
+starts accumulation over, allowing a full retransmission with that id.
 
 ## Wire format (version 1)
 

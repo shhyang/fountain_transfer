@@ -46,12 +46,22 @@ pub async fn send_message(
     addr: SocketAddr,
     message: &WireMessage,
 ) -> Result<(), NetError> {
+    send_message_counted(socket, addr, message)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn send_message_counted(
+    socket: &UdpSocket,
+    addr: SocketAddr,
+    message: &WireMessage,
+) -> Result<usize, NetError> {
     let bytes = encode_message(message)?;
     if bytes.len() > MAX_DATAGRAM {
         return Err(NetError::DatagramTooLarge(bytes.len()));
     }
     socket.send_to(&bytes, addr).await?;
-    Ok(())
+    Ok(bytes.len())
 }
 
 /// Receive one wire message using the library's default idle timeout.
@@ -64,10 +74,19 @@ pub async fn recv_message_timeout(
     socket: &UdpSocket,
     wait: Duration,
 ) -> Result<(WireMessage, SocketAddr), NetError> {
+    let (bytes, peer) = recv_datagram_timeout(socket, wait).await?;
+    let message = decode_message(&bytes)?;
+    Ok((message, peer))
+}
+
+pub(crate) async fn recv_datagram_timeout(
+    socket: &UdpSocket,
+    wait: Duration,
+) -> Result<(Vec<u8>, SocketAddr), NetError> {
     let mut buf = vec![0u8; MAX_DATAGRAM];
     let (len, peer) = timeout(wait, socket.recv_from(&mut buf))
         .await
         .map_err(|_| NetError::Timeout(wait))??;
-    let message = decode_message(&buf[..len])?;
-    Ok((message, peer))
+    buf.truncate(len);
+    Ok((buf, peer))
 }
