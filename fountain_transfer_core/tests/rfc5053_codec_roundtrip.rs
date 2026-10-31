@@ -7,7 +7,7 @@ use fountain_transfer_core::{Rfc5053Decoder, Rfc5053Encoder, Rfc5053Transmission
 fn rfc5053_codec_roundtrip() {
     let transfer_length_f = 77usize;
     let symbol_size_t = 8usize;
-    let params = Rfc5053TransmissionParams::for_object(transfer_length_f, symbol_size_t);
+    let params = Rfc5053TransmissionParams::for_object(transfer_length_f, symbol_size_t, 30);
 
     let object: Vec<u8> = (0..transfer_length_f).map(|i| (i % 251) as u8).collect();
 

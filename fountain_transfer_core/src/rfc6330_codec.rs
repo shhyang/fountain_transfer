@@ -3,15 +3,16 @@
 //! This initial v1 API is intentionally small:
 //! - only supports Z=1 blocking (single source block)
 //! - exposes packet ingest for systematic + repair packets
-//! - delegates padding (K … K′−1) to [`raptor_q::RaptorQEncoder`] / [`raptor_q::RaptorQDecoder`]
+//! - delegates padding (K … K′−1) to `fountain_scheme::rfc::rq`'s
+//!   [`RaptorQEncoder`] / [`RaptorQDecoder`]
 
-use crate::{default_raptor_q_ldpc_type, DEFAULT_DMAX};
 use crate::rfc6330_layout;
 use crate::rfc6330_mapping;
 use fountain_engine::traits::{CodeScheme, DataOperator};
+use fountain_scheme::rfc::rq::{
+    LDPCType, RaptorQDecoder, RaptorQEncoder, RaptorQSysCode,
+};
 use fountain_utility::VecDataOperater;
-use raptor_q::raptor_q_main::raptor_q_main;
-use raptor_q::{LDPCType, RaptorQDecoder, RaptorQEncoder};
 
 /// Packet identifier (single source block for now).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,8 +37,9 @@ pub struct Rfc6330TransmissionParams {
     pub symbol_size_t: usize,
     /// Source symbol count `K` derived as `ceil(F/T)`.
     pub k: usize,
-    pub(crate) dmax: usize,
-    pub(crate) ldpc_type: LDPCType,
+    /// Codec params for RaptorQ/engine.
+    pub dmax: usize,
+    pub ldpc_type: LDPCType,
 }
 
 /// Convenience builder matching the plan's `EncoderBuilder` shape.
@@ -46,9 +48,19 @@ pub struct Rfc6330EncoderBuilder {
 }
 
 impl Rfc6330EncoderBuilder {
-    pub fn for_object(object_len_f: usize, symbol_size_t: usize) -> Self {
+    pub fn for_object(
+        object_len_f: usize,
+        symbol_size_t: usize,
+        dmax: usize,
+        ldpc_type: LDPCType,
+    ) -> Self {
         Self {
-            params: Rfc6330TransmissionParams::for_object(object_len_f, symbol_size_t),
+            params: Rfc6330TransmissionParams::for_object(
+                object_len_f,
+                symbol_size_t,
+                dmax,
+                ldpc_type,
+            ),
         }
     }
 
@@ -66,17 +78,8 @@ impl Rfc6330EncoderBuilder {
 }
 
 impl Rfc6330TransmissionParams {
-    /// Derives `K` as `ceil(F/T)` using the transfer crate's default RaptorQ settings.
-    pub fn for_object(object_len_f: usize, symbol_size_t: usize) -> Self {
-        Self::with_codec_options(
-            object_len_f,
-            symbol_size_t,
-            DEFAULT_DMAX,
-            default_raptor_q_ldpc_type(),
-        )
-    }
-
-    pub(crate) fn with_codec_options(
+    /// Derives `K` as `ceil(F/T)`.
+    pub fn for_object(
         object_len_f: usize,
         symbol_size_t: usize,
         dmax: usize,
@@ -117,11 +120,7 @@ impl Rfc6330Encoder {
     ) -> Self {
         assert_eq!(object.len(), params.transfer_length_f);
 
-        let scheme = raptor_q_main::new(
-            params.k,
-            params.dmax,
-            params.ldpc_type.clone(),
-        );
+        let scheme = RaptorQSysCode::new(params.k, params.dmax, params.ldpc_type.clone());
         let num_total = scheme.get_params().num_total();
 
         let padded_k = rfc6330_layout::pad_object_to_k_symbols(
@@ -210,11 +209,7 @@ impl Rfc6330Decoder {
         params: Rfc6330TransmissionParams,
         operator: Box<dyn DataOperator>,
     ) -> Self {
-        let scheme = raptor_q_main::new(
-            params.k,
-            params.dmax,
-            params.ldpc_type.clone(),
-        );
+        let scheme = RaptorQSysCode::new(params.k, params.dmax, params.ldpc_type.clone());
         let num_total = scheme.get_params().num_total();
         let decoder = RaptorQDecoder::new_with_operator(
             scheme,
@@ -287,6 +282,8 @@ mod tests {
         let params = Rfc6330TransmissionParams::for_object(
             transfer_length_f,
             symbol_size_t,
+            30,
+            LDPCType::ReversedLDPC,
         );
 
         let object: Vec<u8> = (0..transfer_length_f).map(|i| (i % 251) as u8).collect();

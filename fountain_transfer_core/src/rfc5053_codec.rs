@@ -1,11 +1,10 @@
 //! RFC 5053 codec layer for transfer (correctness-first, Z=1).
 
-use crate::DEFAULT_DMAX;
 use crate::rfc5053_layout;
 use fountain_engine::traits::{CodeScheme, DataOperator};
 use fountain_engine::{Decoder, Encoder};
+use fountain_scheme::rfc::r10::Raptor10SysCode;
 use fountain_utility::VecDataOperater;
-use raptor_10::Raptor10SysCode;
 
 /// Packet identifier (single source block for now).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,11 +24,11 @@ pub struct Rfc5053TransmissionParams {
     pub transfer_length_f: usize,
     pub symbol_size_t: usize,
     pub k: usize,
-    pub(crate) dmax: usize,
+    pub dmax: usize,
 }
 
 impl Rfc5053TransmissionParams {
-    pub fn for_object(object_len_f: usize, symbol_size_t: usize) -> Self {
+    pub fn for_object(object_len_f: usize, symbol_size_t: usize, dmax: usize) -> Self {
         assert!(symbol_size_t > 0);
         let k = rfc5053_layout::calc_k(object_len_f, symbol_size_t);
         assert!(k > 0, "object_len_f must be > 0 for now");
@@ -37,7 +36,7 @@ impl Rfc5053TransmissionParams {
             transfer_length_f: object_len_f,
             symbol_size_t,
             k,
-            dmax: DEFAULT_DMAX,
+            dmax,
         }
     }
 }
@@ -48,9 +47,9 @@ pub struct Rfc5053EncoderBuilder {
 }
 
 impl Rfc5053EncoderBuilder {
-    pub fn for_object(object_len_f: usize, symbol_size_t: usize) -> Self {
+    pub fn for_object(object_len_f: usize, symbol_size_t: usize, dmax: usize) -> Self {
         Self {
-            params: Rfc5053TransmissionParams::for_object(object_len_f, symbol_size_t),
+            params: Rfc5053TransmissionParams::for_object(object_len_f, symbol_size_t, dmax),
         }
     }
 
@@ -206,7 +205,7 @@ mod tests {
     fn rfc5053_roundtrip_with_packet_loss() {
         let transfer_length_f = 77usize;
         let symbol_size_t = 8usize;
-        let params = Rfc5053TransmissionParams::for_object(transfer_length_f, symbol_size_t);
+        let params = Rfc5053TransmissionParams::for_object(transfer_length_f, symbol_size_t, 30);
 
         let object: Vec<u8> = (0..transfer_length_f).map(|i| (i % 251) as u8).collect();
 

@@ -1,8 +1,8 @@
-# Standalone crate manifest (single-repo publish). Installed by standalone/sync-from-monorepo.sh.
+# CLI crate for the fountain_transfer GitHub project.
 
 [package]
 name = "fountain_transfer"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 authors = ["Shenghao Yang"]
 license = "MIT"
@@ -27,7 +27,7 @@ name = "fountain"
 path = "src/main.rs"
 
 [dependencies]
-fountain_transfer_core = { path = "../fountain_transfer_core", version = "1.0", default-features = false }
+fountain_transfer_core = { path = "../fountain_transfer_core", version = "2.0", default-features = false }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 bincode = "1"

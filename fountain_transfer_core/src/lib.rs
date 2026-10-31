@@ -4,8 +4,8 @@
 //!
 //! # Features
 //!
-//! - **`raptor-q`** (default) — RFC 6330 via `raptor_q`; enables [`CodecConfig::RaptorQ`].
-//! - **`raptor-10`** (default) — RFC 5053 via `raptor_10`; enables [`CodecConfig::Raptor10`].
+//! - **`raptor-q`** (default) — RFC 6330 via `fountain_scheme::rfc::rq`; enables [`CodecConfig::RaptorQ`].
+//! - **`raptor-10`** (default) — RFC 5053 via `fountain_scheme::rfc::r10`; enables [`CodecConfig::Raptor10`].
 //!
 //! Build with only one codec, e.g. `cargo build -p fountain_transfer_core --no-default-features --features raptor-q`.
 //!
@@ -16,7 +16,8 @@
 //! - [`TransferEncoder`] / [`TransferDecoder`] — traits implemented by [`TransferEncoderImpl`] / [`TransferDecoderImpl`]
 //! - [`StorageManager`] / [`SlabStorageManager`] — optional `fountain_operators` integration
 //!
-//! RaptorQ LDPC and maximum degree are fixed inside this crate ([`codec_config_from_kind`]); integrators need not configure `raptor_q` codec internals.
+//! [`DEFAULT_DMAX`] and a reversed RaptorQ LDPC precode are used by
+//! [`codec_config_from_kind`]; custom values can be supplied through [`CodecConfig`].
 //!
 //! Re-exported for integrators: [`DecodeStatus`].
 
@@ -45,14 +46,7 @@ pub use rfc5053_codec::{
 };
 
 #[cfg(feature = "raptor-q")]
-use raptor_q::LDPCType;
-
-pub(crate) const DEFAULT_DMAX: usize = 30;
-
-#[cfg(feature = "raptor-q")]
-pub(crate) fn default_raptor_q_ldpc_type() -> LDPCType {
-    LDPCType::ReversedLDPC
-}
+pub use fountain_scheme::rfc::rq::LDPCType;
 
 use fountain_engine::traits::DataOperator;
 use fountain_operators::SlabDataOperator;
@@ -62,6 +56,9 @@ use rfc5053_codec::EncodingPacket as Rfc5053Packet;
 use rfc6330_codec::EncodingPacket as Rfc6330Packet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+
+/// Default maximum degree (`dmax`) for RaptorQ and Raptor10 in this facade.
+pub const DEFAULT_DMAX: usize = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecKind {
@@ -79,9 +76,12 @@ pub struct TransferPacket {
 #[derive(Debug, Clone)]
 pub enum CodecConfig {
     #[cfg(feature = "raptor-q")]
-    RaptorQ,
+    RaptorQ {
+        dmax: usize,
+        ldpc_type: LDPCType,
+    },
     #[cfg(feature = "raptor-10")]
-    Raptor10,
+    Raptor10 { dmax: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub struct TransferSpec {
 }
 
 impl TransferSpec {
-    /// Build a spec from object size, symbol size, and codec kind (codec internals are fixed in this crate).
+    /// Build a spec from object size, symbol size, and codec kind (uses [`DEFAULT_DMAX`] and default RaptorQ LDPC).
     pub fn new(
         transfer_length_f: usize,
         symbol_size_t: usize,
@@ -108,9 +108,9 @@ impl TransferSpec {
     pub fn codec_kind(&self) -> CodecKind {
         match &self.codec {
             #[cfg(feature = "raptor-q")]
-            CodecConfig::RaptorQ => CodecKind::RaptorQ,
+            CodecConfig::RaptorQ { .. } => CodecKind::RaptorQ,
             #[cfg(feature = "raptor-10")]
-            CodecConfig::Raptor10 => CodecKind::Raptor10,
+            CodecConfig::Raptor10 { .. } => CodecKind::Raptor10,
         }
     }
 }
@@ -135,7 +135,7 @@ impl Display for TransferError {
             Self::InvalidSymbolSize => write!(f, "symbol_size_t must be > 0"),
             Self::InvalidTransferLength => write!(f, "transfer_length_f must be > 0"),
             Self::UnsupportedSourceBlock(sbn) => {
-                write!(f, "only sbn=0 is supported in v1, got {sbn}")
+                write!(f, "only sbn=0 is currently supported, got {sbn}")
             }
             Self::SymbolLengthMismatch { expected, actual } => {
                 write!(f, "symbol length mismatch: expected {expected}, got {actual}")
@@ -233,10 +233,12 @@ impl TransferEncoderImpl {
         }
         let encoder = match &spec.codec {
             #[cfg(feature = "raptor-q")]
-            CodecConfig::RaptorQ => {
+            CodecConfig::RaptorQ { dmax, ldpc_type } => {
                 let params = Rfc6330TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
+                    ldpc_type.clone(),
                 );
                 Self::RaptorQ(
                     Rfc6330Encoder::new_with_default_operator(params, object),
@@ -244,10 +246,11 @@ impl TransferEncoderImpl {
                 )
             }
             #[cfg(feature = "raptor-10")]
-            CodecConfig::Raptor10 => {
+            CodecConfig::Raptor10 { dmax } => {
                 let params = Rfc5053TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
                 );
                 Self::Raptor10(
                     Rfc5053Encoder::new_with_default_operator(params, object),
@@ -278,10 +281,12 @@ impl TransferEncoderImpl {
         }
         let encoder = match &spec.codec {
             #[cfg(feature = "raptor-q")]
-            CodecConfig::RaptorQ => {
+            CodecConfig::RaptorQ { dmax, ldpc_type } => {
                 let params = Rfc6330TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
+                    ldpc_type.clone(),
                 );
                 Self::RaptorQ(
                     Rfc6330Encoder::new_with_operator(params, object, manager.new_operator()),
@@ -289,10 +294,11 @@ impl TransferEncoderImpl {
                 )
             }
             #[cfg(feature = "raptor-10")]
-            CodecConfig::Raptor10 => {
+            CodecConfig::Raptor10 { dmax } => {
                 let params = Rfc5053TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
                 );
                 Self::Raptor10(
                     Rfc5053Encoder::new_with_operator(params, object, manager.new_operator()),
@@ -372,18 +378,21 @@ impl TransferDecoderImpl {
         validate_spec(&spec)?;
         let decoder = match &spec.codec {
             #[cfg(feature = "raptor-q")]
-            CodecConfig::RaptorQ => {
+            CodecConfig::RaptorQ { dmax, ldpc_type } => {
                 let params = Rfc6330TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
+                    ldpc_type.clone(),
                 );
                 Self::RaptorQ(Rfc6330Decoder::new_with_default_operator(params), spec)
             }
             #[cfg(feature = "raptor-10")]
-            CodecConfig::Raptor10 => {
+            CodecConfig::Raptor10 { dmax } => {
                 let params = Rfc5053TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
                 );
                 Self::Raptor10(Rfc5053Decoder::new_with_default_operator(params), spec)
             }
@@ -404,10 +413,12 @@ impl TransferDecoderImpl {
         }
         let decoder = match &spec.codec {
             #[cfg(feature = "raptor-q")]
-            CodecConfig::RaptorQ => {
+            CodecConfig::RaptorQ { dmax, ldpc_type } => {
                 let params = Rfc6330TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
+                    ldpc_type.clone(),
                 );
                 Self::RaptorQ(
                     Rfc6330Decoder::new_with_operator(params, manager.new_operator()),
@@ -415,10 +426,11 @@ impl TransferDecoderImpl {
                 )
             }
             #[cfg(feature = "raptor-10")]
-            CodecConfig::Raptor10 => {
+            CodecConfig::Raptor10 { dmax } => {
                 let params = Rfc5053TransmissionParams::for_object(
                     spec.transfer_length_f,
                     spec.symbol_size_t,
+                    *dmax,
                 );
                 Self::Raptor10(
                     Rfc5053Decoder::new_with_operator(params, manager.new_operator()),
@@ -502,13 +514,22 @@ fn validate_spec(spec: &TransferSpec) -> Result<(), TransferError> {
 }
 
 /// Build [`CodecConfig`] for a [`CodecKind`] when the corresponding crate feature is enabled.
+///
+/// Uses [`DEFAULT_DMAX`] and the crate's default RaptorQ LDPC precode (reversed LDPC).
 pub fn codec_config_from_kind(kind: CodecKind) -> Result<CodecConfig, TransferError> {
+    build_codec_config(kind, DEFAULT_DMAX)
+}
+
+fn build_codec_config(kind: CodecKind, dmax: usize) -> Result<CodecConfig, TransferError> {
     ensure_codec_enabled(kind)?;
     match kind {
         CodecKind::RaptorQ => {
             #[cfg(feature = "raptor-q")]
             {
-                Ok(CodecConfig::RaptorQ)
+                Ok(CodecConfig::RaptorQ {
+                    dmax,
+                    ldpc_type: raptor_q_ldpc_type(),
+                })
             }
             #[cfg(not(feature = "raptor-q"))]
             {
@@ -518,7 +539,7 @@ pub fn codec_config_from_kind(kind: CodecKind) -> Result<CodecConfig, TransferEr
         CodecKind::Raptor10 => {
             #[cfg(feature = "raptor-10")]
             {
-                Ok(CodecConfig::Raptor10)
+                Ok(CodecConfig::Raptor10 { dmax })
             }
             #[cfg(not(feature = "raptor-10"))]
             {
@@ -526,6 +547,11 @@ pub fn codec_config_from_kind(kind: CodecKind) -> Result<CodecConfig, TransferEr
             }
         }
     }
+}
+
+#[cfg(feature = "raptor-q")]
+fn raptor_q_ldpc_type() -> LDPCType {
+    LDPCType::ReversedLDPC
 }
 
 fn ensure_codec_enabled(kind: CodecKind) -> Result<(), TransferError> {
@@ -602,7 +628,11 @@ mod tests {
     #[test]
     #[cfg(feature = "raptor-10")]
     fn rejects_malformed_packet() {
-        let spec = TransferSpec::new(77, 8, CodecKind::Raptor10).expect("spec");
+        let spec = TransferSpec {
+            transfer_length_f: 77,
+            symbol_size_t: 8,
+            codec: CodecConfig::Raptor10 { dmax: 30 },
+        };
         let mut dec = TransferDecoderImpl::new(spec).expect("decoder");
 
         let err = dec
@@ -702,7 +732,11 @@ mod tests {
     #[cfg(feature = "raptor-10")]
     fn raptor_10_roundtrip_default_operator() {
         let object = sample_object(77);
-        let spec = TransferSpec::new(object.len(), 8, CodecKind::Raptor10).expect("spec");
+        let spec = TransferSpec {
+            transfer_length_f: object.len(),
+            symbol_size_t: 8,
+            codec: CodecConfig::Raptor10 { dmax: 30 },
+        };
         let mut enc = TransferEncoderImpl::new(spec.clone(), &object).expect("encoder");
         let mut dec = TransferDecoderImpl::new(spec).expect("decoder");
         for packet in enc.source_packets() {
